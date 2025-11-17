@@ -2,7 +2,7 @@
 
 [![GraalVM downloads][badge-dl]][downloads] [![GraalVM docs][badge-docs]][docs] [![GraalVM on Slack][badge-slack]][slack] [![GraalVM on Twitter][badge-twitter]][twitter] [![GraalVM on YouTube][badge-yt]][youtube]  [![GraalVM Gate][badge-gate]][gate] [![License][badge-license]](#license)
 
-GraalVM is a high-performance JDK distribution that compiles your Java applications ahead of time into standalone binaries. These binaries start instantly, provide peak performance with no warmup, and use fewer resources.
+GraalVM is a high-performance JDK distribution that compiles your Java applications ahead of time into standalone binaries. These binaries start instantly, provide peak performance with no warmup, and use fewer resources
 You can use GraalVM just like any other Java Development Kit in your IDE.
 
 The project website at [https://www.graalvm.org/][website] describes how to [get started][getting-started], how to [stay connected][community], and how to [contribute][contributors].
@@ -45,7 +45,7 @@ Directory | Description
 
 GraalVM provides additional languages, tools, and other components developed in related repositories. These are:
 
-Name         | Description
+Name         |  Description
 ------------ | -------------
 [FastR] | Implementation of the R language.
 [GraalJS] | Implementation of JavaScript and Node.js.
@@ -69,7 +69,7 @@ Name         | Description
 
 GraalVM Community Edition is open source and distributed under [version 2 of the GNU General Public License with the “Classpath” Exception](LICENSE), which are the same terms as for Java. The licenses of the individual GraalVM components are generally derivative of the license of a particular language (see the table below).
 
-Component(s) | License
+Component(s) |  License
 ------------ | -------------
 [Espresso](espresso/LICENSE), [Ideal Graph Visualizer](visualizer/LICENSE) | GPL 2
 [GraalVM Compiler](compiler/LICENSE.md), [SubstrateVM](substratevm/LICENSE), [Tools](tools/LICENSE), [VM](vm/LICENSE_GRAALVM_CE) | GPL 2 with Classpath Exception
