@@ -26,7 +26,7 @@ This also applies to languages, tools, and other components maintained in [relat
 This source repository is the main repository for GraalVM and includes the following components:
 
 Directory | Description
------------- | --------------
+--------------- | ----------------
 [`.devcontainer/`](.devcontainer/) | Configuration files for GitHub dev containers.
 [`.github/`](.github/) | Configuration files for GitHub issues, workflows, ….
 [`compiler/`](compiler/) | [Graal compiler][reference-compiler], a modern, versatile compiler written in Java.
