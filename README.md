@@ -11,7 +11,7 @@ The project website at [https://www.graalvm.org/][website] describes how to [get
 
 Please refer to the [GraalVM website for documentation][docs].
 You can find most of the documentation sources in the [_docs/_](docs/) directory in the same hierarchy as displayed on the website.
-Additional documentation including developer instructions for individual components can be found in corresponding _docs/_ sub-directories.
+Additional documentation including developer instructions for individual components can be found in corresponding _docs/_ sub-directories..
 The documentation for the Truffle framework, for example, is in [_truffle/docs/_](truffle/docs/).
 This also applies to languages, tools, and other components maintained in [related repositories](#related-repositories).
 
@@ -20,13 +20,13 @@ This also applies to languages, tools, and other components maintained in [relat
 * Open a [GitHub issue][issues] for bug reports, questions, or requests for enhancements.
 * Join the [GraalVM Slack][slack] to connect with the community and the GraalVM team.
 * Report a security vulnerability according to the [Reporting Vulnerabilities guide][reporting-vulnerabilities].
-
-## Repository Structure
+    
+## Repository Structure    
 
 This source repository is the main repository for GraalVM and includes the following components:
 
-Directory | Description
---------------- | -------------------
+Directory | Description    
+------------------- | --------------------
 [`.devcontainer/`](.devcontainer/) | Configuration files for GitHub dev containers.
 [`.github/`](.github/) | Configuration files for GitHub issues, workflows, ….
 [`compiler/`](compiler/) | [Graal compiler][reference-compiler], a modern, versatile compiler written in Java.
