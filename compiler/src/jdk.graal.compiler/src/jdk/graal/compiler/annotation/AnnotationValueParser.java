@@ -33,6 +33,7 @@ import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import jdk.graal.compiler.core.common.LibGraalSupport;
 import jdk.graal.compiler.util.EconomicHashMap;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.JavaConstant;
@@ -150,7 +151,7 @@ public class AnnotationValueParser {
             result = new ElementTypeMismatch(memberType.toJavaName());
         } else if (tag != '[' &&
                         !(result instanceof ErrorElement) &&
-                        !matchesMemberType(result, memberType)) {
+                        !AnnotationValueType.matchesElementType(result, memberType)) {
             if (result instanceof AnnotationValue) {
                 result = new ElementTypeMismatch(result.toString());
             } else {
@@ -158,22 +159,6 @@ public class AnnotationValueParser {
             }
         }
         return result;
-    }
-
-    private static boolean matchesMemberType(Object result, ResolvedJavaType memberType) {
-        if (result instanceof AnnotationValue av) {
-            return memberType.equals(av.getAnnotationType());
-        }
-        if (result instanceof ResolvedJavaType) {
-            return memberType.getName().equals("Ljava/lang/Class;");
-        }
-        if (result instanceof EnumElement ee) {
-            return ee.enumType.equals(memberType);
-        }
-        if (memberType.isPrimitive()) {
-            return result.getClass() == memberType.getJavaKind().toBoxedJavaClass();
-        }
-        return memberType.toJavaName().equals(result.getClass().getName());
     }
 
     private static Object parsePrimitiveConst(char tag,
@@ -217,7 +202,19 @@ public class AnnotationValueParser {
         if (!sig.equals("V")) {
             checkSig(sig);
         }
-        return UnresolvedJavaType.create(sig).resolve(container);
+        try {
+            return UnresolvedJavaType.create(sig).resolve(container);
+        } catch (Error e) {
+            if (LibGraalSupport.inLibGraalRuntime()) {
+                String s = e.toString();
+                if (s.contains("NoClassDefFoundError") && s.contains(sig)) {
+                    // Workaround for JDK that does not properly translate
+                    // a NoClassDefFoundError from HotSpot into libgraal
+                    throw (NoClassDefFoundError) new NoClassDefFoundError(sig).initCause(e);
+                }
+            }
+            throw e;
+        }
     }
 
     static Object parseEnumValue(ResolvedJavaType enumType, ByteBuffer buf, ConstantPool constPool) {

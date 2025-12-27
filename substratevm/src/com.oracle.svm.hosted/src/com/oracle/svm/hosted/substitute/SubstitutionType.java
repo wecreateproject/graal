@@ -24,15 +24,15 @@
  */
 package com.oracle.svm.hosted.substitute;
 
-import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.List;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.annotation.AnnotationWrapper;
+import com.oracle.svm.util.AnnotatedWrapper;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
@@ -44,34 +44,36 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.UnresolvedJavaType;
+import jdk.vm.ci.meta.annotation.Annotated;
 
 /**
  * Type which fully substitutes its original type, i.e. @{@link Substitute} on the class level.
  *
  * @see InjectedFieldsType
  */
-public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper {
+public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper, AnnotatedWrapper {
 
     private final ResolvedJavaType original;
     private final ResolvedJavaType annotated;
 
     /**
      * This field is used in the {@link com.oracle.svm.hosted.SubstitutionReportFeature} class to
-     * determine {@link SubstitutionType} objects which correspond to type.
+     * determine {@link SubstitutionType} objects are user-defined substitutions (from the
+     * classpath).
      */
-    private final boolean isUserSubstitution;
+    private final boolean userSubstitution;
 
     private final ResolvedJavaField[][] instanceFields;
 
-    public SubstitutionType(ResolvedJavaType original, ResolvedJavaType annotated, boolean isUserSubstitution) {
+    public SubstitutionType(ResolvedJavaType original, ResolvedJavaType annotated, boolean userSubstitution) {
         this.annotated = annotated;
         this.original = original;
-        this.isUserSubstitution = isUserSubstitution;
+        this.userSubstitution = userSubstitution;
         this.instanceFields = new ResolvedJavaField[][]{annotated.getInstanceFields(false), annotated.getInstanceFields(true)};
     }
 
     public boolean isUserSubstitution() {
-        return isUserSubstitution;
+        return userSubstitution;
     }
 
     public ResolvedJavaType getOriginal() {
@@ -232,7 +234,12 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     }
 
     @Override
-    public List<JavaType> getPermittedSubclasses() {
+    public boolean isHidden() {
+        return annotated.isHidden();
+    }
+
+    @Override
+    public List<? extends JavaType> getPermittedSubclasses() {
         return annotated.getPermittedSubclasses();
     }
 
@@ -268,7 +275,7 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     }
 
     @Override
-    public AnnotatedElement getAnnotationRoot() {
+    public Annotated getWrappedAnnotated() {
         return annotated;
     }
 
@@ -300,6 +307,11 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     @Override
     public ResolvedJavaType getEnclosingType() {
         return annotated.getEnclosingType();
+    }
+
+    @Override
+    public ResolvedJavaMethod getEnclosingMethod() {
+        return annotated.getEnclosingMethod();
     }
 
     @Override
@@ -364,12 +376,6 @@ public class SubstitutionType implements ResolvedJavaType, OriginalClassProvider
     @Override
     public boolean isCloneableWithAllocation() {
         throw JVMCIError.unimplemented();
-    }
-
-    @SuppressWarnings("deprecation")
-    @Override
-    public ResolvedJavaType getHostClass() {
-        return original.getHostClass();
     }
 
     @Override

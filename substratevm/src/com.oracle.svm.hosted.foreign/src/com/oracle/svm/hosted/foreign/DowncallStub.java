@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.hosted.foreign;
 
+import static com.oracle.svm.util.AnnotationUtil.newAnnotationValue;
+
 import java.util.List;
 
 import org.graalvm.nativeimage.c.function.CFunction;
@@ -42,7 +44,6 @@ import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.snippets.CFunctionSnippets;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.BasedOnJDKFile;
-import com.oracle.svm.hosted.annotation.SubstrateAnnotationExtractor;
 import com.oracle.svm.hosted.code.NonBytecodeMethod;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 import com.oracle.svm.util.ReflectionUtil;
@@ -104,13 +105,10 @@ class DowncallStub extends NonBytecodeMethod {
         this.nep = nep;
     }
 
-    @Uninterruptible(reason = "See DowncallStub.getInjectedAnnotations.", calleeMustBe = false)
-    @SuppressWarnings("unused")
-    private static void uninterruptibleAnnotationForAllowHeapAccessHolder() {
-    }
-
-    private static final List<AnnotationValue> INJECTED_ANNOTATIONS_FOR_ALLOW_HEAP_ACCESS = SubstrateAnnotationExtractor.prepareInjectedAnnotations(
-                    Uninterruptible.Utils.getAnnotation(ReflectionUtil.lookupMethod(DowncallStub.class, "uninterruptibleAnnotationForAllowHeapAccessHolder")));
+    private static final List<AnnotationValue> INJECTED_ANNOTATIONS_FOR_ALLOW_HEAP_ACCESS = List.of(
+                    newAnnotationValue(Uninterruptible.class,
+                                    "reason", "See DowncallStub.getInjectedAnnotations.",
+                                    "calleeMustBe", false));
 
     @Override
     public List<AnnotationValue> getInjectedAnnotations() {
@@ -123,7 +121,7 @@ class DowncallStub extends NonBytecodeMethod {
         if (nep.allowHeapAccess()) {
             return INJECTED_ANNOTATIONS_FOR_ALLOW_HEAP_ACCESS;
         }
-        return null;
+        return List.of();
     }
 
     /**
@@ -132,6 +130,8 @@ class DowncallStub extends NonBytecodeMethod {
      */
     @Override
     public StructuredGraph buildGraph(DebugContext debug, AnalysisMethod method, HostedProviders providers, Purpose purpose) {
+        AbiUtils abiUtils = AbiUtils.singleton();
+
         ForeignGraphKit kit = new ForeignGraphKit(debug, providers, method);
         FrameStateBuilder state = kit.getFrameState();
         boolean deoptimizationTarget = SubstrateCompilationDirectives.isDeoptTarget(method);
@@ -142,7 +142,7 @@ class DowncallStub extends NonBytecodeMethod {
         arguments = argumentsAndNep.getLeft();
         ValueNode runtimeNep = argumentsAndNep.getRight();
 
-        AbiUtils.Adapter.Result.FullNativeAdaptation adapted = AbiUtils.singleton().adapt(kit.unboxArguments(arguments, this.nep.methodType()), this.nep);
+        AbiUtils.Adapter.Result.FullNativeAdaptation adapted = abiUtils.adapt(kit.unboxArguments(arguments, this.nep.methodType()), this.nep);
         for (var node : adapted.nodesToAppendToGraph()) {
             kit.append(node);
         }

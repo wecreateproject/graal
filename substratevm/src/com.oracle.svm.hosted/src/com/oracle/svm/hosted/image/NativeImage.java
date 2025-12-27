@@ -49,6 +49,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.CHeader;
@@ -103,6 +104,10 @@ import com.oracle.svm.core.meta.MethodRef;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.os.ImageHeapProvider;
 import com.oracle.svm.core.reflect.SubstrateAccessor;
+import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.ByteFormattingUtil;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
@@ -125,6 +130,7 @@ import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
+import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.util.ReflectionUtil;
 import com.oracle.svm.util.ReflectionUtil.ReflectionUtilError;
 
@@ -149,7 +155,7 @@ public abstract class NativeImage extends AbstractImage {
 
     private final ObjectFile objectFile;
     private final int wordSize;
-    private final Set<HostedMethod> uniqueEntryPoints = new HashSet<>();
+    private final Set<HostedMethod> uniqueEntryPoints = new HashSet<>(); // noEconomicSet(streaming)
     private final MethodPointerRelocationProvider relocationProvider;
 
     private ImageHeapLayoutInfo heapLayout;
@@ -269,7 +275,7 @@ public abstract class NativeImage extends AbstractImage {
     private static Class<? extends CHeader.Header> cHeader(HostedMethod entryPointStub) {
         /* check if method is annotated */
         AnalysisMethod entryPoint = CEntryPointCallStubSupport.singleton().getMethodForStub((CEntryPointCallStubMethod) entryPointStub.wrapped.wrapped);
-        CHeader methodAnnotation = entryPoint.getDeclaredAnnotation(CHeader.class);
+        CHeader methodAnnotation = AnnotationUtil.getAnnotation(entryPoint, CHeader.class);
         if (methodAnnotation != null) {
             return methodAnnotation.value();
         }
@@ -277,7 +283,7 @@ public abstract class NativeImage extends AbstractImage {
         /* check if enclosing classes are annotated */
         AnalysisType enclosingType = entryPoint.getDeclaringClass();
         while (enclosingType != null) {
-            CHeader enclosing = enclosingType.getDeclaredAnnotation(CHeader.class);
+            CHeader enclosing = AnnotationUtil.getAnnotation(enclosingType, CHeader.class);
             if (enclosing != null) {
                 return enclosing.value();
             }
@@ -561,7 +567,7 @@ public abstract class NativeImage extends AbstractImage {
             // We print the heap statistics after the heap was successfully written because this
             // could modify objects that will be part of the image heap.
             printHeapStatistics(heap.getLayouter().getPartitions());
-            heap.dumpMetadata();
+            heap.dumpMetadata(heapLayout);
         }
     }
 
@@ -908,7 +914,7 @@ public abstract class NativeImage extends AbstractImage {
 
     private static void printHistogram(ImageHeapPartition partition, Iterable<ObjectInfo> objects) {
         HeapHistogram histogram = new HeapHistogram();
-        Set<ObjectInfo> uniqueObjectInfo = new HashSet<>();
+        EconomicSet<ObjectInfo> uniqueObjectInfo = EconomicSet.create();
 
         long uniqueCount = 0L;
         long uniqueSize = 0L;
@@ -961,8 +967,8 @@ public abstract class NativeImage extends AbstractImage {
         }
 
         @Override
-        public Set<BuildDependency> getDependencies(Map<Element, LayoutDecisionMap> decisions) {
-            HashSet<BuildDependency> deps = ObjectFile.minimalDependencies(decisions, getElement());
+        public EconomicSet<BuildDependency> getDependencies(Map<Element, LayoutDecisionMap> decisions) {
+            EconomicSet<BuildDependency> deps = ObjectFile.minimalDependencies(decisions, getElement());
             LayoutDecision ourContent = decisions.get(getElement()).getDecision(LayoutDecision.Kind.CONTENT);
             LayoutDecision ourVaddr = decisions.get(getElement()).getDecision(LayoutDecision.Kind.VADDR);
             LayoutDecision rodataVaddr = decisions.get(getRodataSection()).getDecision(LayoutDecision.Kind.VADDR);
@@ -1106,6 +1112,7 @@ public abstract class NativeImage extends AbstractImage {
     }
 }
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class)
 @AutomaticallyRegisteredFeature
 final class MethodPointerInvalidHandlerFeature implements InternalFeature {
     @Override

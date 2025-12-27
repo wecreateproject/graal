@@ -61,7 +61,7 @@ import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
-import com.oracle.svm.core.configure.RuntimeConditionSet;
+import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.encoder.SymbolEncoder;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -75,8 +75,8 @@ import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.CompressedGlobTrie;
 import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.GlobTrieNode;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
 import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
+import com.oracle.svm.core.layeredimagesingleton.LayeredPersistFlags;
 import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.traits.BuiltinTraits.AllAccess;
@@ -138,7 +138,7 @@ public final class Resources {
      */
     private final EconomicMap<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> resources = ImageHeapMap.createNonLayeredMap();
     /** Regexp patterns used to match names of resources to be included in the image. */
-    private final EconomicMap<RequestedPattern, RuntimeConditionSet> requestedPatterns = ImageHeapMap.createNonLayeredMap();
+    private final EconomicMap<RequestedPattern, RuntimeDynamicAccessMetadata> requestedPatterns = ImageHeapMap.createNonLayeredMap();
 
     /**
      * The string representation of {@link ModuleNameResourceKey} that are already registered in
@@ -348,18 +348,18 @@ public final class Resources {
         Module m = module != null && module.isNamed() ? module : null;
         synchronized (resources) {
             ModuleResourceKey key = createStorageKey(m, resourceName);
-            RuntimeConditionSet conditionSet = RuntimeConditionSet.emptySet();
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = RuntimeDynamicAccessMetadata.emptySet(false);
             ConditionalRuntimeValue<ResourceStorageEntryBase> entry = resources.get(key);
             if (isNegativeQuery) {
                 if (entry == null) {
-                    addResource(key, new ConditionalRuntimeValue<>(conditionSet, NEGATIVE_QUERY_MARKER));
+                    addResource(key, new ConditionalRuntimeValue<>(dynamicAccessMetadata, NEGATIVE_QUERY_MARKER));
                 }
                 return;
             }
 
             if (entry == null || entry.getValueUnconditionally() == NEGATIVE_QUERY_MARKER) {
                 updateTimeStamp();
-                entry = new ConditionalRuntimeValue<>(conditionSet, new ResourceStorageEntry(isDirectory, fromJar));
+                entry = new ConditionalRuntimeValue<>(dynamicAccessMetadata, new ResourceStorageEntry(isDirectory, fromJar));
                 addResource(key, entry);
             } else {
                 if (key.module() != null) {
@@ -409,7 +409,7 @@ public final class Resources {
         ModuleResourceKey key = createStorageKey(module, resourceName);
         synchronized (resources) {
             updateTimeStamp();
-            addResource(key, new ConditionalRuntimeValue<>(RuntimeConditionSet.emptySet(), new ResourceExceptionEntry(e)));
+            addResource(key, new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.emptySet(false), new ResourceExceptionEntry(e)));
         }
     }
 
@@ -428,14 +428,14 @@ public final class Resources {
         assert MissingRegistrationUtils.throwMissingRegistrationErrors();
         synchronized (requestedPatterns) {
             updateTimeStamp();
-            addPattern(new RequestedPattern(encoder.encodeModule(module), handleEscapedCharacters(pattern)), RuntimeConditionSet.createHosted(condition));
+            addPattern(new RequestedPattern(encoder.encodeModule(module), handleEscapedCharacters(pattern)), RuntimeDynamicAccessMetadata.createHosted(condition, false));
         }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private void addPattern(RequestedPattern pattern, RuntimeConditionSet condition) {
+    private void addPattern(RequestedPattern pattern, RuntimeDynamicAccessMetadata dynamicAccessMetadata) {
         if (!previousLayerPatterns.contains(pattern.toString())) {
-            requestedPatterns.put(pattern, condition);
+            requestedPatterns.put(pattern, dynamicAccessMetadata);
         }
     }
 
@@ -508,7 +508,7 @@ public final class Resources {
             }
         }
         traceResource(resourceName, moduleName);
-        if (!entry.getConditions().satisfied()) {
+        if (!entry.getDynamicAccessMetadata().satisfied()) {
             return missingMetadata(module, resourceName, probe);
         }
 
@@ -567,7 +567,7 @@ public final class Resources {
         VMError.guarantee(MissingRegistrationUtils.throwMissingRegistrationErrors(), "include patterns are only stored in the image with exact reachability metadata");
         String glob = GlobUtils.transformToTriePath(resourceName, moduleName);
         for (var r : layeredSingletons()) {
-            MapCursor<RequestedPattern, RuntimeConditionSet> cursor = r.requestedPatterns.getEntries();
+            MapCursor<RequestedPattern, RuntimeDynamicAccessMetadata> cursor = r.requestedPatterns.getEntries();
             while (cursor.advance()) {
                 RequestedPattern moduleResourcePair = cursor.getKey();
                 if (Objects.equals(moduleName, moduleResourcePair.module) && matchResource(moduleResourcePair.pattern, resourceName) && cursor.getValue().satisfied()) {
@@ -752,23 +752,22 @@ public final class Resources {
 
         @Override
         public SingletonTrait getLayeredCallbacksTrait() {
-            return new SingletonTrait(SingletonTraitKind.LAYERED_CALLBACKS, new SingletonLayeredCallbacks() {
+            return new SingletonTrait(SingletonTraitKind.LAYERED_CALLBACKS, new SingletonLayeredCallbacks<Resources>() {
 
                 @Override
-                public LayeredImageSingleton.PersistFlags doPersist(ImageSingletonWriter writer, Object singleton) {
-                    Resources instance = (Resources) singleton;
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, Resources singleton) {
                     List<String> resourceKeys = new ArrayList<>();
                     List<Boolean> resourceRegistrationStates = new ArrayList<>();
-                    Set<String> patterns = new HashSet<>(instance.previousLayerPatterns);
+                    Set<String> patterns = new HashSet<>(singleton.previousLayerPatterns); // noEconomicSet(streaming)
 
-                    var cursor = instance.resources.getEntries();
+                    var cursor = singleton.resources.getEntries();
                     while (cursor.advance()) {
                         resourceKeys.add(cursor.getKey().toString());
                         boolean isNegativeQuery = cursor.getValue().getValueUnconditionally() == NEGATIVE_QUERY_MARKER;
                         resourceRegistrationStates.add(!isNegativeQuery);
                     }
 
-                    for (var entry : instance.previousLayerResources.entrySet()) {
+                    for (var entry : singleton.previousLayerResources.entrySet()) {
                         /*
                          * If a complete entry overwrites a negative query from a previous layer,
                          * the previousLayerResources map entry needs to be skipped to register the
@@ -780,26 +779,26 @@ public final class Resources {
                         }
                     }
 
-                    instance.requestedPatterns.getKeys().forEach(p -> patterns.add(p.toString()));
+                    singleton.requestedPatterns.getKeys().forEach(p -> patterns.add(p.toString()));
 
                     writer.writeStringList(RESOURCE_KEYS, resourceKeys);
                     writer.writeBoolList(RESOURCE_REGISTRATION_STATES, resourceRegistrationStates);
                     writer.writeStringList(PATTERNS, patterns.stream().toList());
 
-                    return LayeredImageSingleton.PersistFlags.CREATE;
+                    return LayeredPersistFlags.CREATE;
                 }
 
                 @Override
-                public Class<? extends LayeredSingletonInstantiator> getSingletonInstantiator() {
+                public Class<? extends LayeredSingletonInstantiator<?>> getSingletonInstantiator() {
                     return SingletonInstantiator.class;
                 }
             });
         }
     }
 
-    static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator {
+    static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<Resources> {
         @Override
-        public Object createFromLoader(ImageSingletonLoader loader) {
+        public Resources createFromLoader(ImageSingletonLoader loader) {
             List<String> previousLayerResourceKeys = loader.readStringList(RESOURCE_KEYS);
             List<Boolean> previousLayerRegistrationStates = loader.readBoolList(RESOURCE_REGISTRATION_STATES);
             Map<String, Boolean> previousLayerResources = new HashMap<>();

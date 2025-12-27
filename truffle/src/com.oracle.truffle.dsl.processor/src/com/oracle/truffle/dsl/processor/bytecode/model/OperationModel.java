@@ -81,6 +81,7 @@ public class OperationModel implements PrettyPrintable {
         LOAD_LOCAL_MATERIALIZED,
         STORE_LOCAL,
         STORE_LOCAL_MATERIALIZED,
+        CLEAR_LOCAL,
 
         CUSTOM,
         CUSTOM_SHORT_CIRCUIT,
@@ -274,16 +275,18 @@ public class OperationModel implements PrettyPrintable {
     }
 
     public OperationModel setOperationBeginArguments(OperationArgument... operationBeginArguments) {
-        if (this.operationBeginArguments != null) {
-            assert this.operationBeginArguments.length == operationBeginArguments.length;
+        if (this.operationBeginArguments != EMPTY_ARGUMENTS && this.operationBeginArguments.length != operationBeginArguments.length) {
+            throw new AssertionError("Number of begin arguments for %s should not change (was %d, attempted to set to %d).".formatted(name, this.operationBeginArguments.length,
+                            operationBeginArguments.length));
         }
         this.operationBeginArguments = operationBeginArguments;
         return this;
     }
 
     public OperationModel setOperationEndArguments(OperationArgument... operationEndArguments) {
-        if (this.operationEndArguments != null) {
-            assert this.operationEndArguments.length == operationEndArguments.length;
+        if (this.operationEndArguments != EMPTY_ARGUMENTS && this.operationEndArguments.length != operationEndArguments.length) {
+            throw new AssertionError(
+                            "Number of end arguments for %s should not change (was %d, attempted to set to %d).".formatted(name, this.operationEndArguments.length, operationEndArguments.length));
         }
         this.operationEndArguments = operationEndArguments;
         return this;

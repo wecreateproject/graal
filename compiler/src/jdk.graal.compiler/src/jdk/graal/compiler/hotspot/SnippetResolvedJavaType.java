@@ -24,10 +24,10 @@
  */
 package jdk.graal.compiler.hotspot;
 
-import java.lang.annotation.Annotation;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 
 import jdk.graal.compiler.core.common.LibGraalSupport;
 import jdk.graal.compiler.debug.GraalError;
@@ -41,6 +41,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.UnresolvedJavaType;
+import jdk.vm.ci.meta.annotation.AnnotationsInfo;
 
 /**
  * A minimal implementation of {@link ResolvedJavaType} for use by libgraal.
@@ -173,12 +174,6 @@ public final class SnippetResolvedJavaType implements ResolvedJavaType {
         throw new NoClassDefFoundError();
     }
 
-    @SuppressWarnings("deprecation")
-    @Override
-    public ResolvedJavaType getHostClass() {
-        throw new UnsupportedOperationException();
-    }
-
     @Override
     public boolean isInstance(JavaConstant obj) {
         if (obj instanceof SnippetObjectConstant) {
@@ -240,6 +235,11 @@ public final class SnippetResolvedJavaType implements ResolvedJavaType {
     public ResolvedJavaType getArrayClass() {
         assert arrayOfType != null;
         return arrayOfType;
+    }
+
+    @Override
+    public boolean isHidden() {
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -313,6 +313,11 @@ public final class SnippetResolvedJavaType implements ResolvedJavaType {
     }
 
     @Override
+    public ResolvedJavaMethod getEnclosingMethod() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public ResolvedJavaMethod[] getDeclaredConstructors() {
         return getDeclaredConstructors(true);
     }
@@ -357,17 +362,12 @@ public final class SnippetResolvedJavaType implements ResolvedJavaType {
     }
 
     @Override
-    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
+    public <T> T getDeclaredAnnotationInfo(Function<AnnotationsInfo, T> parser) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Annotation[] getAnnotations() {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Annotation[] getDeclaredAnnotations() {
+    public AnnotationsInfo getTypeAnnotationInfo() {
         throw new UnsupportedOperationException();
     }
 

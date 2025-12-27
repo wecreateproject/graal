@@ -31,7 +31,6 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -40,6 +39,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
@@ -47,13 +47,13 @@ import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 
 import com.oracle.svm.configure.ClassNameSupport;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
-import com.oracle.svm.core.configure.RuntimeConditionSet;
+import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
 import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
+import com.oracle.svm.core.layeredimagesingleton.LayeredPersistFlags;
 import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.option.HostedOptionKey;
@@ -103,12 +103,6 @@ public final class ClassForNameSupport {
         }
     }
 
-    private ClassLoader libGraalLoader;
-
-    public void setLibGraalLoader(ClassLoader libGraalLoader) {
-        this.libGraalLoader = libGraalLoader;
-    }
-
     @Platforms(Platform.HOSTED_ONLY.class)
     public static ClassForNameSupport currentLayer() {
         return LayeredImageSingletonSupport.singleton().lookup(ClassForNameSupport.class, false, true);
@@ -127,7 +121,7 @@ public final class ClassForNameSupport {
      * The map used to collect registered class names. When respecting class loaders this replaces
      * knownClasses.
      */
-    private final EconomicMap<String, RuntimeConditionSet> knownClassNames;
+    private final EconomicMap<String, RuntimeDynamicAccessMetadata> knownClassNames;
     /**
      * The map used to collect exceptions that should be thrown by Class.forName. Only used when
      * respecting class loaders.
@@ -137,7 +131,7 @@ public final class ClassForNameSupport {
      * The map used to collect unsafe allocated classes. This map only collects data for the current
      * layer.
      */
-    private final EconomicMap<Class<?>, RuntimeConditionSet> unsafeInstantiatedClasses;
+    private final EconomicMap<Class<?>, RuntimeDynamicAccessMetadata> unsafeInstantiatedClasses;
 
     /**
      * The map used to collect classes registered in previous layers. The boolean associated to each
@@ -184,18 +178,18 @@ public final class ClassForNameSupport {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerClass(Class<?> clazz, ClassLoader runtimeClassLoader) {
-        registerClass(AccessCondition.unconditional(), clazz, runtimeClassLoader);
+        registerClass(AccessCondition.unconditional(), clazz, runtimeClassLoader, false);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerClass(AccessCondition condition, Class<?> clazz, ClassLoader runtimeClassLoader) {
+    public void registerClass(AccessCondition condition, Class<?> clazz, ClassLoader runtimeClassLoader, boolean preserved) {
         assert !clazz.isPrimitive() : "primitive classes cannot be looked up by name";
         if (PredefinedClassesSupport.isPredefined(clazz)) {
             return; // must be defined at runtime before it can be looked up
         }
         String name = clazz.getName();
         if (respectClassLoader()) {
-            registerKnownClassName(condition, name);
+            registerKnownClassName(condition, name, preserved);
             Class<?> elemental = clazz;
             while (elemental.isArray()) {
                 elemental = elemental.getComponentType();
@@ -208,25 +202,14 @@ public final class ClassForNameSupport {
                 ConditionalRuntimeValue<Object> existingEntry = knownClasses.get(name);
                 Object currentValue = existingEntry == null ? null : existingEntry.getValueUnconditionally();
 
-                /* TODO: Remove workaround once GR-53985 is implemented */
-                if (currentValue instanceof Class<?> currentClazz && clazz.getClassLoader() != currentClazz.getClassLoader()) {
-                    /* Ensure runtime lookup of LibGraalClassLoader classes */
-                    if (isLibGraalClass(currentClazz)) {
-                        return;
-                    }
-                    if (isLibGraalClass(clazz)) {
-                        currentValue = null;
-                    }
-                }
-
                 if (currentValue == null || // never seen
                                 currentValue == NEGATIVE_QUERY ||
                                 currentValue == clazz) {
                     currentValue = clazz;
-                    var cond = updateConditionalValue(existingEntry, currentValue, condition);
+                    var cond = updateConditionalValue(existingEntry, currentValue, condition, preserved);
                     addKnownClass(name, cond);
                 } else if (currentValue instanceof Throwable) { // failed at linking time
-                    var cond = updateConditionalValue(existingEntry, currentValue, condition);
+                    var cond = updateConditionalValue(existingEntry, currentValue, condition, preserved);
                     /*
                      * If the class has already been seen as throwing an error, we don't overwrite
                      * this error. Nevertheless, we have to update the set of conditionals to be
@@ -258,29 +241,27 @@ public final class ClassForNameSupport {
         }
     }
 
-    @Platforms(HOSTED_ONLY.class)
-    private boolean isLibGraalClass(Class<?> clazz) {
-        return libGraalLoader != null && clazz.getClassLoader() == libGraalLoader;
-    }
-
     public static ConditionalRuntimeValue<Object> updateConditionalValue(ConditionalRuntimeValue<Object> existingConditionalValue, Object newValue,
-                    AccessCondition additionalCondition) {
+                    AccessCondition additionalCondition, boolean preserved) {
         if (existingConditionalValue == null) {
-            return new ConditionalRuntimeValue<>(RuntimeConditionSet.createHosted(additionalCondition), newValue);
+            return new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.createHosted(additionalCondition, preserved), newValue);
         } else {
-            existingConditionalValue.getConditions().addCondition(additionalCondition);
+            existingConditionalValue.getDynamicAccessMetadata().addCondition(additionalCondition);
             existingConditionalValue.updateValue(newValue);
+            if (!preserved) {
+                existingConditionalValue.getDynamicAccessMetadata().setNotPreserved();
+            }
             return existingConditionalValue;
         }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerExceptionForClass(AccessCondition condition, String className, Throwable t) {
+    public void registerExceptionForClass(AccessCondition condition, String className, Throwable t, boolean preserved) {
         if (RuntimeClassLoading.isSupported()) {
             return;
         }
         if (respectClassLoader()) {
-            registerKnownClassName(condition, className);
+            registerKnownClassName(condition, className, preserved);
             synchronized (knownExceptions) {
                 knownExceptions.put(className, t);
             }
@@ -292,7 +273,7 @@ public final class ClassForNameSupport {
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerNegativeQuery(AccessCondition condition, String className) {
         if (respectClassLoader()) {
-            registerKnownClassName(condition, className);
+            registerKnownClassName(condition, className, false);
         } else {
             /*
              * If the class is not accessible by the builder class loader, but was already
@@ -303,26 +284,32 @@ public final class ClassForNameSupport {
         }
     }
 
-    private void registerKnownClassName(AccessCondition condition, String className) {
+    private void registerKnownClassName(AccessCondition condition, String className, boolean preserved) {
         assert respectClassLoader();
         synchronized (knownClassNames) {
-            RuntimeConditionSet existingConditions = knownClassNames.get(className);
-            if (existingConditions == null) {
-                knownClassNames.put(className, RuntimeConditionSet.createHosted(condition));
+            RuntimeDynamicAccessMetadata existingMetadata = knownClassNames.get(className);
+            if (existingMetadata == null) {
+                knownClassNames.put(className, RuntimeDynamicAccessMetadata.createHosted(condition, preserved));
             } else {
-                existingConditions.addCondition(condition);
+                existingMetadata.addCondition(condition);
+                if (!preserved) {
+                    existingMetadata.setNotPreserved();
+                }
             }
         }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerUnsafeAllocated(AccessCondition condition, Class<?> clazz) {
+    public void registerUnsafeAllocated(AccessCondition condition, Class<?> clazz, boolean preserved) {
         if (!clazz.isArray() && !clazz.isInterface() && !Modifier.isAbstract(clazz.getModifiers())) {
             /* Otherwise, UNSAFE.allocateInstance results in InstantiationException */
             if (!previousLayerUnsafe.contains(clazz.getName())) {
-                var conditionSet = unsafeInstantiatedClasses.putIfAbsent(clazz, RuntimeConditionSet.createHosted(condition));
+                var conditionSet = unsafeInstantiatedClasses.putIfAbsent(clazz, RuntimeDynamicAccessMetadata.createHosted(condition, preserved));
                 if (conditionSet != null) {
                     conditionSet.addCondition(condition);
+                    if (!preserved) {
+                        conditionSet.setNotPreserved();
+                    }
                 }
             }
         }
@@ -330,11 +317,11 @@ public final class ClassForNameSupport {
 
     private void updateCondition(AccessCondition condition, String className, Object value) {
         synchronized (knownClasses) {
-            var cond = new ConditionalRuntimeValue<>(RuntimeConditionSet.createHosted(condition), value);
+            var cond = new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.createHosted(condition, false), value);
             addKnownClass(className, (map) -> {
                 var runtimeConditions = map.putIfAbsent(className, cond);
                 if (runtimeConditions != null) {
-                    runtimeConditions.getConditions().addCondition(condition);
+                    runtimeConditions.getDynamicAccessMetadata().addCondition(condition);
                 }
             }, cond);
         }
@@ -349,9 +336,9 @@ public final class ClassForNameSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public Set<String> getKnownClassNames() {
+    public EconomicSet<String> getKnownClassNames() {
         EconomicMap<String, ?> map = respectClassLoader() ? knownClassNames : knownClasses;
-        Set<String> set = new HashSet<>(map.size());
+        EconomicSet<String> set = EconomicSet.create(map.size());
         for (String key : map.getKeys()) {
             set.add(key);
         }
@@ -440,15 +427,15 @@ public final class ClassForNameSupport {
         }
     }
 
-    public static RuntimeConditionSet getConditionFor(Class<?> jClass) {
+    public static RuntimeDynamicAccessMetadata getDynamicAccessMetadataFor(Class<?> jClass) {
         Objects.requireNonNull(jClass);
         String jClassName = jClass.getName();
         if (respectClassLoader()) {
-            RuntimeConditionSet conditionSet = getConditionForName(jClassName);
-            if (conditionSet == null) {
-                return RuntimeConditionSet.unmodifiableEmptySet();
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = getDynamicAccessMetadataForName(jClassName);
+            if (dynamicAccessMetadata == null) {
+                return RuntimeDynamicAccessMetadata.unmodifiableEmptyMetadata();
             }
-            return conditionSet;
+            return dynamicAccessMetadata;
         }
         ConditionalRuntimeValue<Object> conditionalClass = null;
         for (var singleton : layeredSingletons()) {
@@ -458,19 +445,49 @@ public final class ClassForNameSupport {
             }
         }
         if (conditionalClass == null) {
-            return RuntimeConditionSet.unmodifiableEmptySet();
+            return RuntimeDynamicAccessMetadata.unmodifiableEmptyMetadata();
         } else {
-            return conditionalClass.getConditions();
+            return conditionalClass.getDynamicAccessMetadata();
         }
+    }
+
+    public static boolean isPreserved(Class<?> jClass) {
+        Objects.requireNonNull(jClass);
+        String jClassName = jClass.getName();
+        if (respectClassLoader()) {
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = getDynamicAccessMetadataForName(jClassName);
+            if (dynamicAccessMetadata == null) {
+                return false;
+            }
+            return dynamicAccessMetadata.isPreserved();
+        }
+        for (var singleton : layeredSingletons()) {
+            ConditionalRuntimeValue<Object> conditionalClass = singleton.knownClasses.get(jClassName);
+            if (conditionalClass != null) {
+                return conditionalClass.getDynamicAccessMetadata().isPreserved();
+            }
+        }
+        return false;
+    }
+
+    public static boolean isUnsafeAllocatedPreserved(Class<?> jClass) {
+        Objects.requireNonNull(jClass);
+        for (var singleton : layeredSingletons()) {
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = singleton.unsafeInstantiatedClasses.get(jClass);
+            if (dynamicAccessMetadata != null) {
+                return dynamicAccessMetadata.isPreserved();
+            }
+        }
+        return false;
     }
 
     public static boolean isRegisteredClass(String className) {
         if (respectClassLoader()) {
-            RuntimeConditionSet conditionSet = getConditionForName(className);
-            if (conditionSet == null) {
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = getDynamicAccessMetadataForName(className);
+            if (dynamicAccessMetadata == null) {
                 return false;
             }
-            return conditionSet.satisfied();
+            return dynamicAccessMetadata.satisfied();
         } else {
             return queryResultFor(className, null) != null;
         }
@@ -479,18 +496,18 @@ public final class ClassForNameSupport {
     @Platforms(Platform.HOSTED_ONLY.class)
     public static boolean isCurrentLayerRegisteredClass(String className) {
         assert respectClassLoader();
-        RuntimeConditionSet conditionSet = currentLayer().knownClassNames.get(className);
-        if (conditionSet == null) {
+        RuntimeDynamicAccessMetadata dynamicAccessMetadata = currentLayer().knownClassNames.get(className);
+        if (dynamicAccessMetadata == null) {
             return false;
         }
-        return conditionSet.satisfied();
+        return dynamicAccessMetadata.satisfied();
     }
 
-    private static RuntimeConditionSet getConditionForName(String className) {
+    private static RuntimeDynamicAccessMetadata getDynamicAccessMetadataForName(String className) {
         for (var singleton : layeredSingletons()) {
-            RuntimeConditionSet conditionSet = singleton.knownClassNames.get(className);
-            if (conditionSet != null) {
-                return conditionSet;
+            RuntimeDynamicAccessMetadata dynamicAccessMetadata = singleton.knownClassNames.get(className);
+            if (dynamicAccessMetadata != null) {
+                return dynamicAccessMetadata;
             }
         }
         return null;
@@ -517,15 +534,15 @@ public final class ClassForNameSupport {
      */
     public static boolean canUnsafeInstantiateAsInstance(DynamicHub hub) {
         Class<?> clazz = DynamicHub.toClass(hub);
-        RuntimeConditionSet conditionSet = null;
+        RuntimeDynamicAccessMetadata dynamicAccessMetadata = null;
         for (var singleton : layeredSingletons()) {
-            conditionSet = singleton.unsafeInstantiatedClasses.get(clazz);
-            if (conditionSet != null) {
+            dynamicAccessMetadata = singleton.unsafeInstantiatedClasses.get(clazz);
+            if (dynamicAccessMetadata != null) {
                 break;
             }
         }
-        if (conditionSet != null) {
-            return conditionSet.satisfied();
+        if (dynamicAccessMetadata != null) {
+            return dynamicAccessMetadata.satisfied();
         }
         return false;
     }
@@ -533,23 +550,22 @@ public final class ClassForNameSupport {
     static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
         @Override
         public SingletonTrait getLayeredCallbacksTrait() {
-            return new SingletonTrait(SingletonTraitKind.LAYERED_CALLBACKS, new SingletonLayeredCallbacks() {
+            return new SingletonTrait(SingletonTraitKind.LAYERED_CALLBACKS, new SingletonLayeredCallbacks<ClassForNameSupport>() {
 
                 @Override
-                public LayeredImageSingleton.PersistFlags doPersist(ImageSingletonWriter writer, Object singleton) {
-                    ClassForNameSupport support = (ClassForNameSupport) singleton;
+                public LayeredPersistFlags doPersist(ImageSingletonWriter writer, ClassForNameSupport singleton) {
                     List<String> classNames = new ArrayList<>();
                     List<Boolean> classStates = new ArrayList<>();
-                    Set<String> unsafeNames = new HashSet<>(support.previousLayerUnsafe);
+                    EconomicSet<String> unsafeNames = EconomicSet.create(singleton.previousLayerUnsafe);
 
-                    var cursor = support.knownClasses.getEntries();
+                    var cursor = singleton.knownClasses.getEntries();
                     while (cursor.advance()) {
                         classNames.add(cursor.getKey());
                         boolean isNegativeQuery = cursor.getValue().getValueUnconditionally() == NEGATIVE_QUERY;
                         classStates.add(!isNegativeQuery);
                     }
 
-                    for (var entry : support.previousLayerClasses.entrySet()) {
+                    for (var entry : singleton.previousLayerClasses.entrySet()) {
                         /*
                          * If a complete entry overwrites a negative query from a previous layer,
                          * the previousLayerClasses map entry needs to be skipped to register the
@@ -561,31 +577,31 @@ public final class ClassForNameSupport {
                         }
                     }
 
-                    support.unsafeInstantiatedClasses.getKeys().iterator().forEachRemaining(c -> unsafeNames.add(c.getName()));
+                    singleton.unsafeInstantiatedClasses.getKeys().iterator().forEachRemaining(c -> unsafeNames.add(c.getName()));
 
                     writer.writeStringList(CLASSES_REGISTERED, classNames);
                     writer.writeBoolList(CLASSES_REGISTERED_STATES, classStates);
-                    writer.writeStringList(UNSAFE_REGISTERED, unsafeNames.stream().toList());
+                    writer.writeStringList(UNSAFE_REGISTERED, unsafeNames.toList());
                     /*
                      * The option is not accessible when the singleton is loaded, so the boolean
                      * needs to be persisted.
                      */
                     writer.writeInt(RESPECTS_CLASS_LOADER, respectClassLoader() ? 1 : 0);
 
-                    return LayeredImageSingleton.PersistFlags.CREATE;
+                    return LayeredPersistFlags.CREATE;
                 }
 
                 @Override
-                public Class<? extends LayeredSingletonInstantiator> getSingletonInstantiator() {
+                public Class<? extends LayeredSingletonInstantiator<?>> getSingletonInstantiator() {
                     return SingletonInstantiator.class;
                 }
             });
         }
     }
 
-    static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator {
+    static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<ClassForNameSupport> {
         @Override
-        public Object createFromLoader(ImageSingletonLoader loader) {
+        public ClassForNameSupport createFromLoader(ImageSingletonLoader loader) {
             List<String> previousLayerClassKeys = loader.readStringList(CLASSES_REGISTERED);
             List<Boolean> previousLayerClassStates = loader.readBoolList(CLASSES_REGISTERED_STATES);
 

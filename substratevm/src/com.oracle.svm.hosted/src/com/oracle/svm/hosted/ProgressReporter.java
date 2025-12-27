@@ -53,9 +53,6 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import com.oracle.svm.core.RuntimeAssertionsSupport;
-import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.util.LogUtils;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.ImageSingletonsSupport;
@@ -71,6 +68,7 @@ import com.oracle.graal.pointsto.util.TimerCollection;
 import com.oracle.svm.common.option.CommonOptionParser;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.BuildArtifacts.ArtifactType;
+import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
@@ -94,6 +92,7 @@ import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
 import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.ByteFormattingUtil;
 import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ProgressReporterFeature.UserRecommendation;
 import com.oracle.svm.hosted.ProgressReporterJsonHelper.AnalysisResults;
@@ -109,6 +108,7 @@ import com.oracle.svm.hosted.util.CPUType;
 import com.oracle.svm.hosted.util.DiagnosticUtils;
 import com.oracle.svm.hosted.util.VMErrorReporter;
 import com.oracle.svm.util.ImageBuildStatistics;
+import com.oracle.svm.util.LogUtils;
 import com.sun.management.OperatingSystemMXBean;
 
 import jdk.graal.compiler.options.OptionDescriptor;
@@ -551,15 +551,15 @@ public class ProgressReporter {
     }
 
     public static List<AnalysisType> reportedReachableTypes(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getTypes(), AnalysisType::isReachable, t -> !t.isInBaseLayer());
+        return reportedElements(universe, universe.getTypes(), AnalysisType::isReachable, t -> !t.isInSharedLayer());
     }
 
     public static List<AnalysisField> reportedReachableFields(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getFields(), AnalysisField::isAccessed, f -> !f.isInBaseLayer());
+        return reportedElements(universe, universe.getFields(), AnalysisField::isAccessed, f -> !f.isInSharedLayer());
     }
 
     public static List<AnalysisMethod> reportedReachableMethods(AnalysisUniverse universe) {
-        return reportedElements(universe, universe.getMethods(), AnalysisMethod::isReachable, m -> !m.isInBaseLayer());
+        return reportedElements(universe, universe.getMethods(), AnalysisMethod::isReachable, m -> !m.isInSharedLayer());
     }
 
     private static <T extends AnalysisElement> List<T> reportedElements(AnalysisUniverse universe, Collection<T> elements, Predicate<T> elementsFilter, Predicate<T> baseLayerFilter) {
@@ -908,7 +908,32 @@ public class ProgressReporter {
                 pathToTypes.computeIfAbsent(path, _ -> new ArrayList<>()).add(artifactType.name().toLowerCase(Locale.ROOT));
             }
         });
-        pathToTypes.forEach((path, typeNames) -> l().a(" ").link(path).dim().a(" (").a(String.join(", ", typeNames)).a(")").reset().println());
+        pathToTypes.forEach((path, typeNames) -> {
+            String artifactTypesString = String.join(", ", typeNames);
+            long artifactSize = getArtifactSize(path);
+            String artifactSizeString = artifactSize >= 0 ? ByteFormattingUtil.bytesToHuman(artifactSize) : "unknown size";
+            l().a(" ").link(path).dim().a(" (").a(artifactTypesString).a(", ").a(artifactSizeString).a(")").reset().println();
+        });
+    }
+
+    private static long getArtifactSize(Path artifactPath) {
+        try {
+            if (Files.isRegularFile(artifactPath)) {
+                return Files.size(artifactPath);
+            } else {
+                try (Stream<Path> artifactDirectorySubPaths = Files.walk(artifactPath)) {
+                    return artifactDirectorySubPaths.filter(Files::isRegularFile).mapToLong(filePath -> {
+                        try {
+                            return Files.size(filePath);
+                        } catch (IOException e) {
+                            return 0;
+                        }
+                    }).sum();
+                }
+            }
+        } catch (IOException e) {
+            return -1;
+        }
     }
 
     private Path reportBuildOutput(Path jsonOutputFile) {

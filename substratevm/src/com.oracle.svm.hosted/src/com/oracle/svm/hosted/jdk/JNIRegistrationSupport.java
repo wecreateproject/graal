@@ -33,7 +33,6 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.SortedMap;
 import java.util.SortedSet;
@@ -42,11 +41,11 @@ import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
-import com.oracle.svm.hosted.imagelayer.CapnProtoAdapters;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
@@ -57,17 +56,28 @@ import com.oracle.svm.core.jdk.JNIRegistrationUtil;
 import com.oracle.svm.core.jdk.NativeLibrarySupport;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonLoader;
 import com.oracle.svm.core.layeredimagesingleton.ImageSingletonWriter;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingleton;
-import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
+import com.oracle.svm.core.layeredimagesingleton.LayeredPersistFlags;
 import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.core.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.core.traits.SingletonLayeredCallbacks;
+import com.oracle.svm.core.traits.SingletonLayeredCallbacksSupplier;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
+import com.oracle.svm.core.traits.SingletonTrait;
+import com.oracle.svm.core.traits.SingletonTraitKind;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.FeatureImpl.AfterAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.AfterImageWriteAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.BeforeImageWriteAccessImpl;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.c.util.FileUtils;
+import com.oracle.svm.hosted.image.AbstractImage.NativeImageKind;
+import com.oracle.svm.hosted.imagelayer.CapnProtoAdapters;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerSingletonLoader;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
 
@@ -87,6 +97,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /** Registration of native JDK libraries. */
 @Platforms(InternalPlatform.PLATFORM_JNI.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class, other = PartiallyLayerAware.class)
 @AutomaticallyRegisteredFeature
 public final class JNIRegistrationSupport extends JNIRegistrationUtil implements InternalFeature {
 
@@ -105,12 +116,8 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        if (ImageLayerBuildingSupport.firstImageBuild()) {
-            jniRegistrationSupportSingleton = new JNIRegistrationSupportSingleton();
-            ImageSingletons.add(JNIRegistrationSupportSingleton.class, jniRegistrationSupportSingleton);
-        } else {
-            jniRegistrationSupportSingleton = JNIRegistrationSupportSingleton.singleton();
-        }
+        jniRegistrationSupportSingleton = new JNIRegistrationSupportSingleton();
+        ImageSingletons.add(JNIRegistrationSupportSingleton.class, jniRegistrationSupportSingleton);
     }
 
     @Override
@@ -121,8 +128,9 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
         if (isWindows()) {
-            var optSunMSCAPIClass = optionalClazz(access, "sun.security.mscapi.SunMSCAPI");
-            isSunMSCAPIProviderReachable = optSunMSCAPIClass.isPresent() && access.isReachable(optSunMSCAPIClass.get());
+            AfterAnalysisAccessImpl afterAnalysisAccessImpl = (AfterAnalysisAccessImpl) access;
+            var optSunMSCAPIClass = optionalType(access, "sun.security.mscapi.SunMSCAPI").map(AnalysisType.class::cast);
+            isSunMSCAPIProviderReachable = optSunMSCAPIClass.isPresent() && afterAnalysisAccessImpl.isReachable(optSunMSCAPIClass.get());
         }
         if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
             for (String library : jniRegistrationSupportSingleton.prevLayerRegisteredLibraries) {
@@ -318,6 +326,15 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
         List<String> linkerCommand;
         Path image = accessImpl.getImagePath();
         Path shimLibrary = image.resolveSibling(System.mapLibraryName(shimName));
+        if (accessImpl.getImageKind() == NativeImageKind.SHARED_LIBRARY && shimLibrary.equals(image)) {
+            /*
+             * A shared library image gets built with the same name this shim-library would have.
+             * This is an advanced use-case, and we assume the user knows what they are doing. Thus,
+             * we will suppress producing a shim library in this case.
+             */
+            return;
+        }
+
         if (isWindows()) {
             /* Dependencies are the native image (so we can re-export from it) and C Runtime. */
             linkerCommand = ImageSingletons.lookup(CCompilerInvoker.class)
@@ -366,32 +383,29 @@ public final class JNIRegistrationSupport extends JNIRegistrationUtil implements
         return importLib;
     }
 
-    private static final class JNIRegistrationSupportSingleton implements LayeredImageSingleton {
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = JNIRegistrationSupportSingleton.LayeredCallbacks.class, layeredInstallationKind = Independent.class)
+    private static final class JNIRegistrationSupportSingleton {
         private final List<String> currentLayerRegisteredLibraries = new CopyOnWriteArrayList<>();
         private final List<String> prevLayerRegisteredLibraries = new ArrayList<>();
 
-        public static JNIRegistrationSupportSingleton singleton() {
-            return ImageSingletons.lookup(JNIRegistrationSupportSingleton.class);
-        }
+        static class LayeredCallbacks extends SingletonLayeredCallbacksSupplier {
+            @Override
+            public SingletonTrait getLayeredCallbacksTrait() {
+                return new SingletonTrait(SingletonTraitKind.LAYERED_CALLBACKS, new SingletonLayeredCallbacks<JNIRegistrationSupportSingleton>() {
+                    @Override
+                    public LayeredPersistFlags doPersist(ImageSingletonWriter writer, JNIRegistrationSupportSingleton singleton) {
+                        var snapshotWriter = ((SVMImageLayerWriter.ImageSingletonWriterImpl) writer).getSnapshotBuilder();
+                        SVMImageLayerWriter.initStringList(snapshotWriter::initRegisteredJNILibraries, singleton.currentLayerRegisteredLibraries.stream());
+                        return LayeredPersistFlags.CALLBACK_ON_REGISTRATION;
+                    }
 
-        @Override
-        public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
-            return LayeredImageSingletonBuilderFlags.BUILDTIME_ACCESS_ONLY;
-        }
-
-        @Override
-        public PersistFlags preparePersist(ImageSingletonWriter writer) {
-            var snapshotWriter = ((SVMImageLayerWriter.ImageSingletonWriterImpl) writer).getSnapshotBuilder();
-            SVMImageLayerWriter.initStringList(snapshotWriter::initRegisteredJNILibraries, currentLayerRegisteredLibraries.stream());
-            return PersistFlags.CREATE;
-        }
-
-        @SuppressWarnings("unused")
-        public static Object createFromLoader(ImageSingletonLoader loader) {
-            JNIRegistrationSupportSingleton singleton = new JNIRegistrationSupportSingleton();
-            var snapshotReader = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader();
-            CapnProtoAdapters.forEach(snapshotReader.getRegisteredJNILibraries(), singleton.prevLayerRegisteredLibraries::add);
-            return singleton;
+                    @Override
+                    public void onSingletonRegistration(ImageSingletonLoader loader, JNIRegistrationSupportSingleton singleton) {
+                        var snapshotReader = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader();
+                        CapnProtoAdapters.forEach(snapshotReader.getRegisteredJNILibraries(), singleton.prevLayerRegisteredLibraries::add);
+                    }
+                });
+            }
         }
     }
 }

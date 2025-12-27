@@ -27,8 +27,9 @@ package com.oracle.graal.pointsto.meta;
 import java.lang.annotation.Annotation;
 import java.util.List;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.util.AnalysisError;
+import com.oracle.svm.util.AnnotationsContainer;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.JavaConstant;
@@ -47,7 +48,7 @@ import jdk.vm.ci.meta.UnresolvedJavaType;
  * this case, a {@link BaseLayerType} is created using information from the base layer and wrapped
  * in an {@link AnalysisType} to replace this missing type is the new layer.
  */
-public class BaseLayerType extends BaseLayerElement implements ResolvedJavaType, OriginalClassProvider {
+public class BaseLayerType extends AnnotationsContainer implements ResolvedJavaType, OriginalClassProvider {
     /**
      * The type corresponding to this {@link BaseLayerType} can be created later while building the
      * new layer. To avoid both types having the same name, the name of the {@link BaseLayerType} is
@@ -227,6 +228,11 @@ public class BaseLayerType extends BaseLayerElement implements ResolvedJavaType,
     }
 
     @Override
+    public boolean isHidden() {
+        throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
+    }
+
+    @Override
     public List<JavaType> getPermittedSubclasses() {
         throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
     }
@@ -322,6 +328,11 @@ public class BaseLayerType extends BaseLayerElement implements ResolvedJavaType,
     }
 
     @Override
+    public ResolvedJavaMethod getEnclosingMethod() {
+        throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
+    }
+
+    @Override
     public ResolvedJavaMethod[] getDeclaredConstructors() {
         throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
     }
@@ -342,21 +353,6 @@ public class BaseLayerType extends BaseLayerElement implements ResolvedJavaType,
 
     @Override
     public boolean isCloneableWithAllocation() {
-        throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
-    }
-
-    @Override
-    public <T extends Annotation> T getAnnotation(Class<T> annotationClass) {
-        throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
-    }
-
-    @Override
-    public Annotation[] getAnnotations() {
-        throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
-    }
-
-    @Override
-    public Annotation[] getDeclaredAnnotations() {
         throw AnalysisError.shouldNotReachHere("This type is incomplete and should not be used.");
     }
 

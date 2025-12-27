@@ -25,8 +25,6 @@
  */
 package com.oracle.svm.core.reflect.serialize;
 
-import static com.oracle.svm.core.SubstrateOptions.ThrowMissingRegistrationErrors;
-
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Constructor;
@@ -40,8 +38,10 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 
 import com.oracle.svm.core.BuildPhaseProvider;
+import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.configure.RuntimeConditionSet;
+import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
+import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
 import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
@@ -209,27 +209,32 @@ public class SerializationSupport implements SerializationRegistry {
      * Temporary key for maps ideally indexed by their {@link Class} or {@link DynamicHub}. At
      * runtime, these maps should be indexed by {@link DynamicHub#getTypeID}
      */
+    @Platforms(Platform.HOSTED_ONLY.class)
     public record DynamicHubKey(DynamicHub hub) {
         public int getTypeID() {
             return hub.getTypeID();
         }
     }
 
-    private final EconomicMap<Object /* DynamicHubKey or DynamicHub.typeID */, RuntimeConditionSet> classes = EconomicMap.create();
-    private final EconomicMap<String, RuntimeConditionSet> lambdaCapturingClasses = EconomicMap.create();
+    @UnknownObjectField(fullyQualifiedTypes = "org.graalvm.collections.EconomicMapImpl", availability = AfterCompilation.class) //
+    private final EconomicMap<Object /* DynamicHubKey or DynamicHub.typeID */, RuntimeDynamicAccessMetadata> classes = EconomicMap.create();
+    private final EconomicMap<String, RuntimeDynamicAccessMetadata> lambdaCapturingClasses = EconomicMap.create();
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerSerializationTargetClass(AccessCondition cnd, DynamicHub hub) {
+    public void registerSerializationTargetClass(AccessCondition cnd, DynamicHub hub, boolean preserved) {
         synchronized (classes) {
-            var previous = classes.putIfAbsent(BuildPhaseProvider.isHostedUniverseBuilt() ? hub.getTypeID() : new DynamicHubKey(hub), RuntimeConditionSet.createHosted(cnd));
+            var previous = classes.putIfAbsent(BuildPhaseProvider.isHostedUniverseBuilt() ? hub.getTypeID() : new DynamicHubKey(hub), RuntimeDynamicAccessMetadata.createHosted(cnd, preserved));
             if (previous != null) {
                 previous.addCondition(cnd);
+                if (!preserved) {
+                    previous.setNotPreserved();
+                }
             }
         }
     }
 
     public void replaceHubKeyWithTypeID() {
-        EconomicMap<Integer, RuntimeConditionSet> newEntries = EconomicMap.create();
+        EconomicMap<Integer, RuntimeDynamicAccessMetadata> newEntries = EconomicMap.create();
         var cursor = classes.getEntries();
         while (cursor.advance()) {
             Object key = cursor.getKey();
@@ -244,7 +249,7 @@ public class SerializationSupport implements SerializationRegistry {
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerLambdaCapturingClass(AccessCondition cnd, String lambdaCapturingClass) {
         synchronized (lambdaCapturingClasses) {
-            var previousConditions = lambdaCapturingClasses.putIfAbsent(lambdaCapturingClass, RuntimeConditionSet.createHosted(cnd));
+            var previousConditions = lambdaCapturingClasses.putIfAbsent(lambdaCapturingClass, RuntimeDynamicAccessMetadata.createHosted(cnd, false));
             if (previousConditions != null) {
                 previousConditions.addCondition(cnd);
             }
@@ -281,14 +286,8 @@ public class SerializationSupport implements SerializationRegistry {
         }
 
         String targetConstructorClassName = targetConstructorClass.getName();
-        if (ThrowMissingRegistrationErrors.hasBeenSet()) {
-            MissingSerializationRegistrationUtils.reportSerialization(declaringClass,
-                            "type '" + declaringClass.getTypeName() + "' with target constructor class '" + targetConstructorClassName + "'");
-        } else {
-            throw VMError.unsupportedFeature("SerializationConstructorAccessor class not found for declaringClass: " + declaringClass.getName() +
-                            " (targetConstructorClass: " + targetConstructorClassName + "). Usually adding " + declaringClass.getName() +
-                            " to serialization-config.json fixes the problem.");
-        }
+        MissingSerializationRegistrationUtils.reportSerialization(declaringClass,
+                        "type '" + declaringClass.getTypeName() + "' with target constructor class '" + targetConstructorClassName + "'");
         return null;
     }
 
@@ -312,5 +311,15 @@ public class SerializationSupport implements SerializationRegistry {
     public boolean isRegisteredForSerialization0(DynamicHub dynamicHub) {
         var conditionSet = classes.get(dynamicHub.getTypeID());
         return conditionSet != null && conditionSet.satisfied();
+    }
+
+    public static boolean isPreservedForSerialization(DynamicHub dynamicHub) {
+        for (SerializationSupport singleton : SerializationSupport.layeredSingletons()) {
+            var conditionSet = singleton.classes.get(dynamicHub.getTypeID());
+            if (conditionSet != null) {
+                return conditionSet.isPreserved();
+            }
+        }
+        return false;
     }
 }

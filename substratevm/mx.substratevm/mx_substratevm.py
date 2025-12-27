@@ -43,6 +43,7 @@ import mx
 import mx_compiler
 import mx_gate
 import mx_unittest
+import mx_sdk
 import mx_sdk_vm
 import mx_sdk_vm_impl
 import mx_javamodules
@@ -87,7 +88,7 @@ def graal_compiler_flags():
 
     return [adjusted_exports(line) for line in compiler_flags[str(version_tag)]]
 
-def classpath(args):
+def classpath(args, extra_excludes=None):
     if not args:
         return [] # safeguard against mx.classpath(None) behaviour
 
@@ -98,7 +99,10 @@ def classpath(args):
         if dep.isJavaProject() or dep.isDistribution():
             transitive_excludes.add(dep)
 
-    implicit_excludes_deps = [mx.dependency(entry) for entry in mx_sdk_vm_impl.NativePropertiesBuildTask.implicit_excludes]
+    excludes = mx_sdk_vm_impl.NativePropertiesBuildTask.implicit_excludes
+    if extra_excludes:
+        excludes += extra_excludes
+    implicit_excludes_deps = [mx.dependency(entry) for entry in excludes]
     mx.walk_deps(implicit_excludes_deps, visit=include_in_excludes)
     cpEntries = mx.classpath_entries(names=args, includeSelf=True, preferProjects=False, excludes=transitive_excludes)
     return mx._entries_to_classpath(cpEntries=cpEntries, resolve=True, includeBootClasspath=False, jdk=mx_compiler.jdk, unique=False, ignoreStripped=False)
@@ -256,7 +260,6 @@ def _maybe_convert_to_args_file(args):
 def native_image_context(common_args=None, hosted_assertions=True, native_image_cmd='', config=None, build_if_missing=False):
     common_args = [] if common_args is None else common_args
     base_args = [
-        '--no-fallback',
         '-H:+ReportExceptionStackTraces',
     ] + svm_experimental_options([
         '-H:+EnforceMaxRuntimeCompileMethods',
@@ -525,13 +528,6 @@ def svm_gate_body(args, tasks):
 
     with Task('Validate JSON build info', tasks, tags=[GraalTags.helloworld]) as t:
         if t:
-            import json
-            try:
-                from jsonschema import validate as json_validate
-                from jsonschema.exceptions import ValidationError, SchemaError
-            except ImportError:
-                mx.abort('Unable to import jsonschema')
-
             json_and_schema_file_pairs = [
                 ('build-artifacts.json', 'build-artifacts-schema-v0.9.0.json'),
                 ('build-output.json', 'build-output-schema-v0.9.4.json'),
@@ -540,19 +536,8 @@ def svm_gate_body(args, tasks):
             build_output_file = join(svmbuild_dir(), 'build-output.json')
             helloworld(['--output-path', svmbuild_dir()] + svm_experimental_options([f'-H:BuildOutputJSONFile={build_output_file}', '-H:+GenerateBuildArtifactsFile']))
 
-            try:
-                for json_file, schema_file in json_and_schema_file_pairs:
-                    with open(join(svmbuild_dir(), json_file)) as f:
-                        json_contents = json.load(f)
-                    with open(join(suite.dir, '..', 'docs', 'reference-manual', 'native-image', 'assets', schema_file)) as f:
-                        schema_contents = json.load(f)
-                    json_validate(json_contents, schema_contents)
-            except IOError as e:
-                mx.abort(f'Unable to load JSON build info: {e}')
-            except ValidationError as e:
-                mx.abort(f'Unable to validate JSON build info against the schema: {e}')
-            except SchemaError as e:
-                mx.abort(f'JSON schema not valid: {e}')
+            schemas_dir = os.path.join(suite.dir, '..', 'docs', 'reference-manual', 'native-image', 'assets')
+            mx_sdk.validate_dir_files_with_file_schema_pairs(schemas_dir, svmbuild_dir(), json_and_schema_file_pairs)
 
     with Task('java agent tests', tasks, tags=[GraalTags.java_agent]) as t:
         if t:
@@ -612,7 +597,7 @@ def conditional_config_task(native_image):
 def run_nic_conditional_config_test(agent_path, conditional_config_filter_path):
     """
     Invoke ConfigurationGenerator test methods across multiple runs to produce multiple partial traces,
-    use native-image-configure to compute the conditional configuration, then compare against the expected
+    use native-image-utils to compute the conditional configuration, then compare against the expected
     configuration.
     """
     test_cases = [
@@ -635,10 +620,12 @@ def run_nic_conditional_config_test(agent_path, conditional_config_filter_path):
                       '-Dcom.oracle.svm.configure.test.conditionalconfig.PartialConfigurationGenerator.enabled=true',
                       '--add-exports=jdk.graal.compiler/jdk.graal.compiler.options=ALL-UNNAMED',
                       '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
+                      '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=ALL-UNNAMED',
+                      '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess',
                       '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.code=ALL-UNNAMED',
                       'com.oracle.svm.configure.test.conditionalconfig.PartialConfigurationGenerator#' + test_case])
     config_output_dir = join(nic_test_dir, 'config-output')
-    nic_exe = mx.cmd_suffix(join(mx.JDKConfig(home=mx_sdk_vm_impl.graalvm_output()).home, 'bin', 'native-image-configure'))
+    nic_exe = mx.cmd_suffix(join(mx.JDKConfig(home=mx_sdk_vm_impl.graalvm_output()).home, 'bin', 'native-image-utils'))
     nic_command = [nic_exe, 'generate-conditional',
                    '--user-code-filter=' + conditional_config_filter_path,
                    '--class-name-filter=' + conditional_config_filter_path,
@@ -650,6 +637,8 @@ def run_nic_conditional_config_test(agent_path, conditional_config_filter_path):
          "-Dcom.oracle.svm.configure.test.conditionalconfig.ConfigurationVerifier.enabled=true",
          '--add-exports=jdk.graal.compiler/jdk.graal.compiler.options=ALL-UNNAMED',
          '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
+         '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=ALL-UNNAMED',
+         '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess',
          '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.code=ALL-UNNAMED',
          'com.oracle.svm.configure.test.conditionalconfig.ConfigurationVerifier'])
 
@@ -667,6 +656,8 @@ def run_agent_conditional_config_test(agent_path, conditional_config_filter_path
                   '-Dcom.oracle.svm.configure.test.conditionalconfig.ConfigurationGenerator.enabled=true',
                   '--add-exports=jdk.graal.compiler/jdk.graal.compiler.options=ALL-UNNAMED',
                   '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
+                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=ALL-UNNAMED',
+                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess',
                   '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.code=ALL-UNNAMED',
                   'com.oracle.svm.configure.test.conditionalconfig.ConfigurationGenerator'])
     # This run verifies that the generated configuration matches the expected one
@@ -674,6 +665,8 @@ def run_agent_conditional_config_test(agent_path, conditional_config_filter_path
                   '-Dcom.oracle.svm.configure.test.conditionalconfig.ConfigurationVerifier.enabled=true',
                   '--add-exports=jdk.graal.compiler/jdk.graal.compiler.options=ALL-UNNAMED',
                   '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
+                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=ALL-UNNAMED',
+                  '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess',
                   '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.code=ALL-UNNAMED',
                   'com.oracle.svm.configure.test.conditionalconfig.ConfigurationVerifier'])
 
@@ -1401,6 +1394,8 @@ svm = mx_sdk_vm.GraalVmJreComponent(
         'substratevm:POINTSTO',
         'substratevm:SVM_CAPNPROTO_RUNTIME',
         'substratevm:NATIVE_IMAGE_BASE',
+        'compiler:VMACCESS',
+        'compiler:HOSTVMACCESS',
     ] + (['substratevm:SVM_FOREIGN'] if mx_sdk_vm.base_jdk().javaCompliance >= '22' else []),
     support_distributions=['substratevm:SVM_GRAALVM_SUPPORT'],
     extra_native_targets=['linux-default-glibc', 'linux-default-musl'] if mx.is_linux() and not mx.get_arch() == 'riscv64' else None,
@@ -1466,6 +1461,7 @@ driver_exe_build_args = driver_build_args + svm_experimental_options([
     '-H:+AllowJRTFileSystem',
     '-H:IncludeResources=com/oracle/svm/driver/launcher/.*',
     '-H:-ParseRuntimeOptions',
+    '-H:-InitializeVM',
     f'-R:{max_heap_size_flag}',
 ])
 
@@ -1546,11 +1542,11 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
     jlink=False,
 ))
 
-ce_llvm_backend = mx_sdk_vm.GraalVmJreComponent(
+ce_llvm_backend = mx_sdk_vm.GraalVmSvmTool(
     suite=suite,
     name='Native Image LLVM Backend',
     short_name='svml',
-    dir_name='svm',
+    dir_name='llvm-backend',
     license_files=[],
     third_party_license_files=[],
     dependencies=[
@@ -1564,6 +1560,7 @@ ce_llvm_backend = mx_sdk_vm.GraalVmJreComponent(
         'substratevm:LLVM_PLATFORM_SPECIFIC_SHADOWED',
         'substratevm:JAVACPP_PLATFORM_SPECIFIC_SHADOWED',
     ],
+    support_distributions=['substratevm:SVM_LLVM_GRAALVM_SUPPORT'],
     stability="experimental-earlyadopter",
     jlink=False,
 )
@@ -1691,6 +1688,17 @@ libgraal_build_args = [
     '-H:+JNIEnhancedErrorCodes',
     '-H:InitialCollectionPolicy=LibGraal',
 
+    # A libgraal image contains classes with the same FQN loaded by different classloaders.
+    # I.e. the SVM runtime depends on
+    # - jdk.vm.ci.* classes loaded by the bootstrap classloader
+    # - jdk.graal.compiler.options.* classes loaded by the platform classloader
+    # - org.graalvm.collections.* classes loaded by the app classloader
+    # But potentially different versions of those classes are also loaded by the
+    # LibGraalClassLoader as part of the classes that libgraal consist of.
+    # Thus, we cannot use the naive default ClassForName implementation that only
+    # works if there are no two different classes in the image with the same FQN.
+    '-H:+ClassForNameRespectsClassLoader',
+
     # Needed for initializing jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE.
     # Remove after JDK-8346781.
     '-Djdk.vm.ci.services.aot=true',
@@ -1805,7 +1813,48 @@ libsvmjdwp = mx_sdk_vm.GraalVmJreComponent(
 
 mx_sdk_vm.register_graalvm_component(libsvmjdwp)
 
-def _native_image_configure_extra_jvm_args():
+lib_jvm_preserved_packages = [
+    'java.util',
+    'java.util.stream',
+    'java.util.concurrent.locks',
+    'java.lang',
+    'java.lang.invoke',
+    'java.io'
+]
+
+mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
+    suite=suite,
+    name='SubstrateVM java',
+    short_name='svmjava',
+    dir_name='svm',
+    license_files=[],
+    third_party_license_files=[],
+    dependencies=[],
+    jar_distributions=[],
+    builder_jar_distributions=[],
+    support_distributions=[],
+    priority=0,
+    library_configs=[
+        mx_sdk_vm.LibraryConfig(
+            destination='<lib:jvm>',
+            jar_distributions=[],
+            build_args=[
+                '--features=com.oracle.svm.hosted.libjvm.LibJVMFeature'
+            ] + svm_experimental_options([
+                '-H:+RuntimeClassLoading',
+                '-H:+InterpreterTraceSupport',
+                '-H:+AllowJRTFileSystem'
+                ] + ['-H:Preserve=package=' + pkg for pkg in lib_jvm_preserved_packages]),
+            headers=False,
+            home_finder=False,
+        ),
+    ],
+    support_libraries_distributions=[],
+    stability="experimental",
+    jlink=False,
+))
+
+def _native_image_utils_extra_jvm_args():
     packages = ['jdk.graal.compiler/jdk.graal.compiler.phases.common', 'jdk.internal.vm.ci/jdk.vm.ci.meta', 'jdk.internal.vm.ci/jdk.vm.ci.services', 'jdk.graal.compiler/jdk.graal.compiler.core.common.util']
     args = ['--add-exports=' + packageName + '=ALL-UNNAMED' for packageName in packages]
     if not mx_sdk_vm.jdk_enables_jvmci_by_default(get_jdk()):
@@ -1825,14 +1874,16 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
         mx_sdk_vm.LauncherConfig(
             use_modules='image',
             main_module='org.graalvm.nativeimage.configure',
-            destination='bin/<exe:native-image-configure>',
+            destination='bin/<exe:native-image-utils>',
+            links=['bin/<exe:native-image-configure>'], # retain the previous name as a symlink
             jar_distributions=['substratevm:SVM_CONFIGURE'],
             main_class='com.oracle.svm.configure.ConfigurationTool',
             build_args=svm_experimental_options([
                 '-H:-ParseRuntimeOptions',
+                '-H:-InitializeVM',
                 '-H:+TreatAllTypeReachableConditionsAsTypeReached',
             ]),
-            extra_jvm_args=_native_image_configure_extra_jvm_args(),
+            extra_jvm_args=_native_image_utils_extra_jvm_args(),
             home_finder=False,
         )
     ],
@@ -2534,9 +2585,9 @@ def native_image_on_jvm(args, **kwargs):
         passedArgs += jacoco_args
     mx.run([executable] + _debug_args() + passedArgs, **kwargs)
 
-@mx.command(suite.name, 'native-image-configure')
-def native_image_configure_on_jvm(args, **kwargs):
-    executable = vm_executable_path('native-image-configure')
+@mx.command(suite.name, 'native-image-utils')
+def native_image_utils_on_jvm(args, **kwargs):
+    executable = vm_executable_path('native-image-utils')
     if not exists(executable):
         mx.abort("Can not find " + executable + "\nDid you forget to build? Try `mx build`")
     mx.run([executable] + _debug_args() + args, **kwargs)
@@ -2750,6 +2801,10 @@ class StandalonePointstoUnittestsConfig(mx_unittest.MxUnittestConfig):
         vmArgs, mainClass, mainClassArgs = config
 
         vmArgs.extend(['--add-exports=jdk.graal.compiler/jdk.graal.compiler.options=ALL-UNNAMED'])
+        # need to access jdk.graal.compiler.phases.util.Providers
+        vmArgs.extend(['--add-exports=jdk.graal.compiler/jdk.graal.compiler.phases.util=ALL-UNNAMED'])
+        # VMAccess needs to access jdk.internal.module.Modules
+        vmArgs.extend(['--add-exports=java.base/jdk.internal.module=jdk.graal.compiler.vmaccess'])
 
         # JVMCI is dynamically exported to Graal when JVMCI is initialized. This is too late
         # for the junit harness which uses reflection to find @Test methods. In addition, the

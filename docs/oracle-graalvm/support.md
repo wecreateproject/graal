@@ -10,7 +10,7 @@ permalink: /support/
 Oracle GraalVM 25 is based on Oracle JDK 25.
 Each release of Oracle GraalVM 25 includes all Oracle Java critical patch updates (CPUs), which are provided on a regular schedule to remedy defects and known vulnerabilities.
 
-Oracle GraalVM 25 is available for Linux, macOS, and Windows on the x64 architecture, and for Linux and macOS on the AArch64 architecture.
+Oracle GraalVM 25 is available for Linux and Windows on the x64 architecture, and for Linux and macOS on the AArch64 architecture.
 
 ## Certified Platforms
 
@@ -35,9 +35,9 @@ Oracle GraalVM 25 is certified on the following platforms:
 
 | Platform | CPU Architecture(s) |
 |----------|---------------------|
-| macOS 15 | AArch64, x64        |
-| macOS 14 | AArch64, x64        |
-| macOS 13 | AArch64, x64        |
+| macOS 15 | AArch64             |
+| macOS 14 | AArch64             |
+| macOS 13 | AArch64             |
 
 **Windows**
 
@@ -59,6 +59,3 @@ Additional open source language runtimes designed for use with Oracle GraalVM 25
 Oracle GraalVM is licensed under [GraalVM Free Terms and Conditions (GFTC) including License for Early Adopter Versions](https://www.oracle.com/downloads/licenses/graal-free-license.html).
 Subject to the conditions in the license, including the License for Early Adopter Versions, the GFTC is intended to permit use by any user including commercial and production use.
 Redistribution is permitted as long as it is not for a fee.
-Oracle GraalVM is also free to use on Oracle Cloud Infrastructure.
-
-Oracle GraalVM is free to use and supported on Oracle Cloud Infrastructure.

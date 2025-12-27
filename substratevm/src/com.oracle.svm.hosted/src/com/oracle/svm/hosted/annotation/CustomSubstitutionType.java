@@ -24,12 +24,11 @@
  */
 package com.oracle.svm.hosted.annotation;
 
-import java.lang.annotation.Annotation;
-import java.lang.reflect.AnnotatedElement;
 import java.util.List;
 
-import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.AnnotatedWrapper;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaConstant;
@@ -42,8 +41,9 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.meta.UnresolvedJavaField;
 import jdk.vm.ci.meta.UnresolvedJavaType;
+import jdk.vm.ci.meta.annotation.Annotated;
 
-public abstract class CustomSubstitutionType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper {
+public abstract class CustomSubstitutionType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper, AnnotatedWrapper {
     private final ResolvedJavaType original;
 
     public CustomSubstitutionType(ResolvedJavaType original) {
@@ -61,7 +61,7 @@ public abstract class CustomSubstitutionType implements ResolvedJavaType, Origin
     }
 
     @Override
-    public AnnotatedElement getAnnotationRoot() {
+    public Annotated getWrappedAnnotated() {
         return null;
     }
 
@@ -145,12 +145,6 @@ public abstract class CustomSubstitutionType implements ResolvedJavaType, Origin
         return original.isAssignableFrom(other);
     }
 
-    @SuppressWarnings("deprecation")
-    @Override
-    public ResolvedJavaType getHostClass() {
-        return original.getHostClass();
-    }
-
     @Override
     public boolean isJavaLangObject() {
         return original.isJavaLangObject();
@@ -207,7 +201,12 @@ public abstract class CustomSubstitutionType implements ResolvedJavaType, Origin
     }
 
     @Override
-    public List<JavaType> getPermittedSubclasses() {
+    public boolean isHidden() {
+        return original.isHidden();
+    }
+
+    @Override
+    public List<? extends JavaType> getPermittedSubclasses() {
         return original.getPermittedSubclasses();
     }
 
@@ -259,6 +258,11 @@ public abstract class CustomSubstitutionType implements ResolvedJavaType, Origin
     @Override
     public ResolvedJavaType getEnclosingType() {
         return original.getEnclosingType();
+    }
+
+    @Override
+    public ResolvedJavaMethod getEnclosingMethod() {
+        return original.getEnclosingMethod();
     }
 
     @Override
@@ -395,16 +399,6 @@ public abstract class CustomSubstitutionType implements ResolvedJavaType, Origin
     @Override
     public boolean isConcrete() {
         return original.isConcrete();
-    }
-
-    @Override
-    public <T extends Annotation> T[] getAnnotationsByType(Class<T> annotationClass) {
-        return original.getAnnotationsByType(annotationClass);
-    }
-
-    @Override
-    public <T extends Annotation> T[] getDeclaredAnnotationsByType(Class<T> annotationClass) {
-        return original.getDeclaredAnnotationsByType(annotationClass);
     }
 
     public ResolvedJavaType getOriginal() {

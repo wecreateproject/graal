@@ -88,9 +88,9 @@ class ReflectionMetadataParser<C, T> extends ReflectionConfigurationParser<C, T>
         for (T clazz : classes) {
             delegate.registerType(conditionResult.get(), clazz);
 
-            delegate.registerDeclaredClasses(queryCondition, clazz);
-            delegate.registerPublicClasses(queryCondition, clazz);
             if (!jniParser) {
+                delegate.registerPublicClasses(queryCondition, clazz);
+                delegate.registerDeclaredClasses(queryCondition, clazz);
                 delegate.registerRecordComponents(queryCondition, clazz);
                 delegate.registerPermittedSubclasses(queryCondition, clazz);
                 delegate.registerNestMembers(queryCondition, clazz);
@@ -106,6 +106,8 @@ class ReflectionMetadataParser<C, T> extends ReflectionConfigurationParser<C, T>
             if (!jniParser) {
                 registerIfNotDefault(data, false, clazz, "serializable", () -> delegate.registerAsSerializable(condition, clazz));
                 registerIfNotDefault(data, false, clazz, "jniAccessible", () -> delegate.registerAsJniAccessed(condition, clazz));
+            } else {
+                delegate.registerAsJniAccessed(condition, clazz);
             }
 
             registerIfNotDefault(data, false, clazz, "allDeclaredConstructors", () -> delegate.registerDeclaredConstructors(condition, false, typeJniAccessible, clazz));

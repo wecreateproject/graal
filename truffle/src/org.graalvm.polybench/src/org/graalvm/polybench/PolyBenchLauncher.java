@@ -106,6 +106,10 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
             this.consumers.add(new ArgumentConsumer("--shared-engine", (value, config) -> config.initMultiEngine().sharedEngine = Boolean.parseBoolean(value)));
             this.consumers.add(new ArgumentConsumer("--eval-source-only", (value, config) -> config.evalSourceOnlyDefault = Boolean.parseBoolean(value)));
             this.consumers.add(new ArgumentConsumer("--multi-context-runs", (value, config) -> config.initMultiEngine().numberOfRuns = Integer.parseInt(value)));
+            this.consumers.add(new ArgumentConsumer("--stage-to-language", (value, config) -> config.stagingLanguage = Language.valueOf(value.toUpperCase())));
+            this.consumers.add(new ArgumentConsumer("--stage-to-file", (value, config) -> config.stagingFilePath = value));
+            this.consumers.add(new ArgumentConsumer("--log-staged-program", (value, config) -> config.logStagedProgram = Boolean.parseBoolean(value)));
+            this.consumers.add(new ArgumentConsumer("--run-staged-program-with", (value, config) -> config.stagedProgramLauncher = value));
         }
 
         Config parse(List<String> arguments) {
@@ -166,6 +170,10 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
 
     public static void main(String[] args) {
         new PolyBenchLauncher().launch(args);
+    }
+
+    public Config getConfig() {
+        return config;
     }
 
     @Override
@@ -260,7 +268,7 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
     @Override
     protected void launch(Context.Builder contextBuilder) {
         if (config.isSingleEngine()) {
-            runHarness(contextBuilder, config.evalSourceOnlyDefault, 0);
+            runOrStageHarness(contextBuilder, config.evalSourceOnlyDefault, 0);
         } else {
             multiEngineLaunch(contextBuilder);
         }
@@ -279,7 +287,7 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
             if (perRunOptions != null) {
                 contextBuilder.options(perRunOptions);
             }
-            runHarness(contextBuilder, config.isEvalSourceOnly(i), i);
+            runOrStageHarness(contextBuilder, config.isEvalSourceOnly(i), i);
         }
     }
 
@@ -349,7 +357,7 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
         }
     }
 
-    private EvalResult evalSource(Context context) {
+    EvalResult evalSource(Context context) {
         final String path = config.path;
         final String language = getLanguageId(config.path);
 
@@ -394,6 +402,9 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
             } finally {
                 config.metric.afterLoad(config);
             }
+            if (language.equals("wasm")) {
+                result = result.newInstance().getMember("exports");
+            }
             return new EvalResult(language, source.getName(), source.hasBytes(), source.getLength(), result);
         }
     }
@@ -422,6 +433,15 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
             this.isBinarySource = isBinarySource;
             this.sourceLength = sourceLength;
             this.value = value;
+        }
+    }
+
+    private void runOrStageHarness(Context.Builder contextBuilder, boolean evalSourceOnly, int run) {
+        if (config.stagingLanguage != null) {
+            PolyBenchStager stager = new PolyBenchStager(this);
+            stager.execute(contextBuilder, evalSourceOnly, run);
+        } else {
+            runHarness(contextBuilder, evalSourceOnly, run);
         }
     }
 
@@ -475,6 +495,10 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
             log("::: Bench specific options :::");
             if (evalResult.value instanceof Value) {
                 Value value = (Value) evalResult.value;
+                Value setup = tryLookup(context, evalResult.languageId, value, "setup");
+                if (setup != null && setup.canExecute()) {
+                    setup.execute();
+                }
                 config.parseBenchSpecificDefaults(value);
                 config.metric.parseBenchSpecificOptions(value);
             }
@@ -550,13 +574,29 @@ public final class PolyBenchLauncher extends AbstractLanguageLauncher {
         }
     }
 
+    private static Value tryLookup(Context context, String languageId, Value evalSourceValue, String memberName) {
+        // language-specific lookup
+        return switch (languageId) {
+            case "wasm" -> evalSourceValue.getMember(memberName);
+            default -> {
+                // first try the memberName directly
+                if (evalSourceValue.hasMember(memberName)) {
+                    yield evalSourceValue.getMember(memberName);
+                } else {
+                    // Fallback for other languages: Look for 'memberName' in global scope.
+                    yield context.getBindings(languageId).getMember(memberName);
+                }
+            }
+        };
+    }
+
     private Workload lookup(Context context, String languageId, Object evalSource, String memberName) {
         Value evalSourceValue = (Value) evalSource;
         Value result;
         // language-specific lookup
         switch (languageId) {
             case "wasm":
-                result = evalSourceValue.newInstance().getMember("exports").getMember(memberName);
+                result = evalSourceValue.getMember(memberName);
                 break;
             case "java":
                 // Espresso doesn't provide methods as executable values.

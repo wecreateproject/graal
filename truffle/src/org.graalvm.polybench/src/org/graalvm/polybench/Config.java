@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,12 +46,17 @@ public class Config {
     Metric metric;
     boolean evalSourceOnlyDefault;
     Summary summary;
+    String[] dependencies;
+    Language stagingLanguage;
+    String stagingFilePath;
+    boolean logStagedProgram;
+    String stagedProgramLauncher;
 
     final List<String> unrecognizedArguments = new ArrayList<>();
 
     private static final int UNINITIALIZED_ITERATIONS = -1;
-    private static final int DEFAULT_WARMUP = 20;
-    private static final int DEFAULT_ITERATIONS = 30;
+    public static final int DEFAULT_WARMUP = 20;
+    public static final int DEFAULT_ITERATIONS = 30;
 
     /**
      * Multi-context runs related configuration.
@@ -99,11 +104,33 @@ public class Config {
             }
         }
         parseBenchSpecificSummary(benchmark);
+        parseBenchSpecificDependencies(benchmark);
+    }
+
+    private void parseBenchSpecificDependencies(Value benchmark) throws InvalidObjectException {
+        if (!benchmark.hasMember("dependencies")) {
+            // No 'dependencies' member provided in the benchmark
+            dependencies = new String[0];
+            return;
+        }
+        Value dependenciesMember = benchmark.getMember("dependencies");
+        if (dependenciesMember.canExecute()) {
+            dependenciesMember = dependenciesMember.execute();
+        }
+        if (!dependenciesMember.hasArrayElements()) {
+            throw new InvalidObjectException("Failed at parsing the 'dependencies' benchmark member due to it not being an array!");
+        }
+        int arraySize = (int) dependenciesMember.getArraySize();
+        dependencies = new String[arraySize];
+        for (int i = 0; i < arraySize; i++) {
+            dependencies[i] = dependenciesMember.getArrayElement(i).asString();
+        }
     }
 
     private void parseBenchSpecificSummary(Value benchmark) throws InvalidObjectException {
         if (!benchmark.hasMember("summary")) {
             // No 'summary' member provided in the benchmark
+            summary = parseFallbackBenchSpecificSummary(benchmark);
             return;
         }
         Value summaryMember = benchmark.getMember("summary");
@@ -129,6 +156,18 @@ public class Config {
         } else {
             throw new InvalidObjectException("Failed at parsing the 'summary' benchmark member due to unrecognized name of '" + summaryClassName + "'!");
         }
+    }
+
+    private static Summary parseFallbackBenchSpecificSummary(Value benchmark) {
+        if (benchmark.hasMember(OutlierRemovalAverageSummary.class.getSimpleName())) {
+            double lowerThreshold = benchmark.getMember(OutlierRemovalAverageSummary.class.getSimpleName() + "LowerThreshold").execute().asDouble();
+            double upperThreshold = benchmark.getMember(OutlierRemovalAverageSummary.class.getSimpleName() + "UpperThreshold").execute().asDouble();
+            return new OutlierRemovalAverageSummary(lowerThreshold, upperThreshold);
+        } else if (benchmark.hasMember(AverageSummary.class.getSimpleName())) {
+            return new AverageSummary();
+        }
+        // defaulting to averaging if the aggregation strategy is not specified
+        return new AverageSummary();
     }
 
     @Override

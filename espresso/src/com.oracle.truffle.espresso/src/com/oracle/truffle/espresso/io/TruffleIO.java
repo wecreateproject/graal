@@ -22,7 +22,10 @@
  */
 package com.oracle.truffle.espresso.io;
 
+import static com.oracle.truffle.espresso.ffi.memory.NativeMemory.IllegalMemoryAccessException;
+import static com.oracle.truffle.espresso.ffi.memory.NativeMemory.MemoryAccessMode;
 import static com.oracle.truffle.espresso.libs.libnio.impl.Target_sun_nio_ch_IOUtil.FD_LIMIT;
+import static com.oracle.truffle.espresso.substitutions.standard.Target_sun_misc_Unsafe.ADDRESS_SIZE;
 
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
@@ -58,6 +61,8 @@ import java.nio.file.OpenOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -70,18 +75,16 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage;
-import com.oracle.truffle.espresso.classfile.descriptors.Name;
-import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.descriptors.EspressoSymbols;
 import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Names;
 import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Signatures;
 import com.oracle.truffle.espresso.descriptors.EspressoSymbols.Types;
+import com.oracle.truffle.espresso.ffi.memory.NativeMemory;
 import com.oracle.truffle.espresso.impl.ContextAccess;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
 import com.oracle.truffle.espresso.libs.LibsState;
-import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.OS;
@@ -90,8 +93,25 @@ import com.oracle.truffle.espresso.substitutions.JavaSubstitution;
 import com.oracle.truffle.espresso.substitutions.JavaType;
 
 /**
- * This class manages the set of file descriptors of a context. File descriptors are associated with
- * {@link String} paths and {@link Channel}s, their capabilities depending on the kind of channel.
+ * Provides IO functionality in EspressoLibs mode (see
+ * {@link com.oracle.truffle.espresso.ffi.EspressoLibsNativeAccess}). This requires managing the set
+ * of file descriptors of a context.
+ * <p>
+ * This class plays a crucial role in EspressoLibs mode. Every guest channel gets associated with a
+ * FileDescriptors which links to the corresponding host channel here {@link TruffleIO#files}. In
+ * substitutions of native IO methods we receive the FileDescriptor as an argument which is then
+ * used to retrieve the corresponding host channel. Then we can easily implement the semantics of
+ * the guest channel's native methods using this host channel. For example see
+ * {@link TruffleIO#readBytes(int, ByteBuffer)}.
+ * <p>
+ * For file IO the host channels is created over the Truffle API
+ * {@link TruffleFile#newByteChannel(Set, FileAttribute[])} making this class practically a binding
+ * layer between the guest file system (see sun.nio.fs.TruffleFileSystemProvider) and Truffle's
+ * Virtual File System (see {@link org.graalvm.polyglot.io.FileSystem}).
+ * <p>
+ * For socket IO, file descriptors are associated with host network channels (see
+ * {@link #openSocket(boolean, boolean, boolean, boolean)}).
+ * <p>
  * Adapted from GraalPy's PosixResources.
  */
 public final class TruffleIO implements ContextAccess {
@@ -143,10 +163,10 @@ public final class TruffleIO implements ContextAccess {
     public final Method sun_nio_fs_DefaultFileSystemProvider_instance;
 
     public final ObjectKlass sun_nio_fs_FileAttributeParser;
-    @CompilationFinal public FileAttributeParser_Sync fileAttributeParserSync;
+    public final FileAttributeParser_Sync fileAttributeParserSync;
 
     public final ObjectKlass sun_nio_ch_FileChannelImpl;
-    @CompilationFinal public FileChannelImpl_Sync fileChannelImplSync;
+    public final FileChannelImpl_Sync fileChannelImplSync;
 
     public final ObjectKlass sun_nio_ch_IOStatus;
     public final IOStatus_Sync ioStatusSync;
@@ -158,7 +178,7 @@ public final class TruffleIO implements ContextAccess {
     public final InetAddressResolver_LookupPolicy_Sync inetAddressResolverLookupPolicySync;
 
     public final ObjectKlass sun_nio_ch_Net;
-    @CompilationFinal public Net_ShutFlags_Sync netShutFlagsSync;
+    public final Net_ShutFlags_Sync netShutFlagsSync;
 
     // Checkstyle: resume field name check
 
@@ -166,6 +186,9 @@ public final class TruffleIO implements ContextAccess {
      * Context-local file-descriptor mappings.
      */
     private final EspressoContext context;
+    /**
+     * The mapping between guest FileDescriptors and host channels.
+     */
     private final Map<Integer, ChannelWrapper> files;
 
     // 0, 1 and 2 are reserved for standard streams.
@@ -640,14 +663,38 @@ public final class TruffleIO implements ContextAccess {
      * @param self The file descriptor holder.
      * @param fdAccess How to get the file descriptor from the holder.
      * @param bytes The byte buffer containing the bytes to write.
-     * @return The number of bytes written, possibly zero.
-     * @see java.io.FileOutputStream#write(byte[])
+     * @return The number of bytes written, possibly zero. If the channel is in non-blocking mode
+     *         and the operation would block {@link IOStatus_Sync#UNAVAILABLE} is returned.
+     * @see WritableByteChannel#write(ByteBuffer)
      */
     @TruffleBoundary
     public int writeBytes(@JavaType(Object.class) StaticObject self,
                     FDAccess fdAccess,
                     ByteBuffer bytes) {
         return writeBytes(getFD(self, fdAccess), bytes);
+    }
+
+    /**
+     * Writes bytes from the address specified to the file associated with the given file descriptor
+     * holder in plain mode.
+     *
+     * @param self The file descriptor holder.
+     * @param fdAccess How to get the file descriptor from the holder.
+     * @param address The address containing the bytes to write.
+     * @param length the number of bytes to write.
+     * @return The number of bytes written, possibly zero. If the channel is in non-blocking mode
+     *         and the operation would block {@link IOStatus_Sync#UNAVAILABLE} is returned.
+     * @see java.io.FileOutputStream#write(byte[])
+     */
+    @TruffleBoundary
+    public int writeAddress(@JavaType(Object.class) StaticObject self,
+                    FDAccess fdAccess,
+                    long address, int length) {
+        try {
+            return writeBytes(self, fdAccess, context.getNativeAccess().nativeMemory().wrapNativeMemory(address, length));
+        } catch (IllegalMemoryAccessException e) {
+            throw Throw.throwIOException("Invalid memory access: Trying to access memory outside the allocated region", getContext());
+        }
     }
 
     /**
@@ -658,7 +705,8 @@ public final class TruffleIO implements ContextAccess {
      * @param bytes The byte array containing the bytes to write.
      * @param off The start of the byte sequence to write from {@code bytes}.
      * @param len The length of the byte sequence to write.
-     * @return The number of bytes written, possibly zero.
+     * @return The number of bytes written, possibly zero. If the channel is in non-blocking mode
+     *         and the operation would block {@link IOStatus_Sync#UNAVAILABLE} is returned.
      * @see java.io.FileOutputStream#write(byte[], int, int)
      */
     @TruffleBoundary
@@ -696,65 +744,67 @@ public final class TruffleIO implements ContextAccess {
     }
 
     /**
-     * Writes the content of the ByteBuffers to the file associated with the given file descriptor
-     * holder in the exact order of the ByteBuffers array.
+     * Writes the content of the underlying "native" ByteBuffers to the file associated with the
+     * given file descriptor holder in the exact order of the ByteBuffers array.
      *
      * @param self The file descriptor holder.
      * @param fdAccess How to get the file descriptor from the holder.
-     * @param buffers The ByteBuffer containing the bytes to write.
+     * @param address The base address of the continuous memory region, which contains addresses and
+     *            lengths for the ByteBuffers we write from.
+     * @param length the number of ByteBuffers to extract from address.
      * @return The number of bytes written, possibly zero.
      * @see java.nio.channels.GatheringByteChannel#write(ByteBuffer[])
      */
     @TruffleBoundary
-    public long writeByteBuffers(@JavaType(Object.class) StaticObject self,
+    public long writev(@JavaType(Object.class) StaticObject self,
                     FDAccess fdAccess,
-                    ByteBuffer[] buffers) {
-        Channel channel = Checks.ensureOpen(getChannel(getFD(self, fdAccess)), getContext());
+                    long address, int length) {
+        NativeMemory nativeMemory = context.getNativeAccess().nativeMemory();
+        AddressLengthPair[] addressLengthPairs = extractAddressLengthPairs(address, length, nativeMemory);
+        StaticObject fileDesc = getFileDesc(self, fdAccess);
+        Channel channel = Checks.ensureOpen(getChannel(getFD(fileDesc)), getContext());
         if (channel instanceof GatheringByteChannel gatheringByteChannel) {
             try {
-                return gatheringByteChannel.write(buffers);
+                return gatheringByteChannel.write(asByteBuffer(addressLengthPairs, nativeMemory));
             } catch (IOException e) {
                 throw Throw.throwIOException(e, context);
             }
         } else {
-            context.getLogger().warning(() -> "No GatheringByteChannel for writev operation!" + channel.getClass());
-            long ret = 0;
-            for (ByteBuffer buf : buffers) {
-                ret += writeBytes(self, fdAccess, buf);
-            }
-            return ret;
+            LibsState.getLogger().warning("No GatheringByteChannel for writev operation! You are using: " + channel.getClass());
         }
+        return sequentialWritev(self, fdAccess, addressLengthPairs);
     }
 
     /**
-     * Reads the content of the file associated with the given file descriptor into the provided
-     * ByteBuffers sequentially.
+     * Reads the content of the file associated with the given file descriptor into the underlying
+     * "native" ByteBuffers.
      *
      * @param self The file descriptor holder.
      * @param fdAccess How to get the file descriptor from the holder.
-     * @param buffers The ByteBuffers we read data into.
+     * @param address The base address of the continuous memory region, which contains addresses and
+     *            lengths for the ByteBuffers we read into.
+     * @param length the number of ByteBuffers to extract from address.
      * @return The number of bytes written, possibly zero.
      * @see java.nio.channels.ScatteringByteChannel#read(ByteBuffer)
      */
     @TruffleBoundary
-    public long readByteBuffers(@JavaType(Object.class) StaticObject self,
+    public long readv(@JavaType(Object.class) StaticObject self,
                     FDAccess fdAccess,
-                    ByteBuffer[] buffers) {
-        Channel channel = Checks.ensureOpen(getChannel(getFD(self, fdAccess)), getContext());
+                    long address, int length) {
+        NativeMemory nativeMemory = context.getNativeAccess().nativeMemory();
+        AddressLengthPair[] addressLengthPairs = extractAddressLengthPairs(address, length, nativeMemory);
+        StaticObject fileDesc = getFileDesc(self, fdAccess);
+        Channel channel = Checks.ensureOpen(getChannel(getFD(fileDesc)), getContext());
         if (channel instanceof ScatteringByteChannel scatteringByteChannel) {
             try {
-                return scatteringByteChannel.read(buffers);
+                return scatteringByteChannel.read(asByteBuffer(addressLengthPairs, nativeMemory));
             } catch (IOException e) {
                 throw Throw.throwIOException(e, context);
             }
         } else {
-            context.getLogger().warning(() -> "No ScatteringByteChannel for readv operation!" + channel.getClass());
-            long ret = 0;
-            for (ByteBuffer buf : buffers) {
-                ret += readBytes(self, fdAccess, buf);
-            }
-            return ret;
+            LibsState.getLogger().warning("No ScatteringByteChannel for readv operation! You are using: " + channel.getClass());
         }
+        return sequentialReadv(self, fdAccess, addressLengthPairs);
     }
 
     /**
@@ -762,7 +812,9 @@ public final class TruffleIO implements ContextAccess {
      *
      * @param self The file descriptor holder.
      * @param fdAccess How to get the file descriptor from the holder.
-     * @return The byte read, or {@code -1} if reading failed.
+     * @return The byte read, or -1 if the channel has reached end-of-stream. If the channel is in
+     *         non-blocking mode and no data is available {@link IOStatus_Sync#UNAVAILABLE} is
+     *         returned.
      * @see FileInputStream#read()
      */
     @TruffleBoundary
@@ -796,8 +848,9 @@ public final class TruffleIO implements ContextAccess {
      * @param off The start of the byte sequence to write to in {@code bytes}.
      * @param len The length of the byte sequence to read.
      * @return The number of bytes read, possibly zero, or -1 if the channel has reached
-     *         end-of-stream
-     * @see java.io.FileInputStream#read(byte[], int, int)
+     *         end-of-stream. If the channel is in non-blocking mode and no data is available
+     *         {@link IOStatus_Sync#UNAVAILABLE} is returned.
+     * @see ReadableByteChannel#read(ByteBuffer)
      */
     @TruffleBoundary
     public int readBytes(@JavaType(Object.class) StaticObject self,
@@ -821,7 +874,8 @@ public final class TruffleIO implements ContextAccess {
      * @param fdAccess How to get the file descriptor from the holder.
      * @param buffer The ByteBuffer that will contain the bytes read.
      * @return The number of bytes read, possibly zero, or -1 if the channel has reached
-     *         end-of-stream
+     *         end-of-stream. If the channel is in non-blocking mode and no data is available
+     *         {@link IOStatus_Sync#UNAVAILABLE} is returned.
      * @see java.io.FileInputStream#read(byte[], int, int)
      */
     @TruffleBoundary
@@ -847,6 +901,25 @@ public final class TruffleIO implements ContextAccess {
             throw JavaSubstitution.unimplemented();
         } catch (IOException e) {
             throw Throw.throwIOException(e, context);
+        }
+    }
+
+    /**
+     * Reads a byte sequence from the file associated with the given file descriptor into the given
+     * memory address in plain mode.
+     *
+     * @param addr the address to read into
+     * @param length how many bytes to read
+     * @see #readBytes(StaticObject, FDAccess, byte[], int, int)
+     */
+    @TruffleBoundary
+    public int readAddress(@JavaType(Object.class) StaticObject self,
+                    FDAccess fdAccess, long addr,
+                    int length) {
+        try {
+            return readBytes(self, fdAccess, context.getNativeAccess().nativeMemory().wrapNativeMemory(addr, length));
+        } catch (IllegalMemoryAccessException e) {
+            throw Throw.throwIOException("Invalid memory access: Trying to access memory outside the allocated region", getContext());
         }
     }
 
@@ -1121,11 +1194,13 @@ public final class TruffleIO implements ContextAccess {
         sun_nio_fs_DefaultFileSystemProvider_instance = sun_nio_fs_DefaultFileSystemProvider.requireDeclaredMethod(Names.instance, Signatures.sun_nio_fs_TruffleFileSystemProvider);
 
         sun_nio_fs_FileAttributeParser = meta.knownKlass(EspressoSymbols.Types.sun_nio_fs_FileAttributeParser);
+        this.fileAttributeParserSync = new FileAttributeParser_Sync(this);
 
         sun_nio_ch_IOStatus = meta.knownKlass(EspressoSymbols.Types.sun_nio_ch_IOStatus);
         ioStatusSync = new IOStatus_Sync(this);
 
         sun_nio_ch_FileChannelImpl = meta.knownKlass(EspressoSymbols.Types.sun_nio_ch_FileChannelImpl);
+        this.fileChannelImplSync = new FileChannelImpl_Sync(this);
 
         sun_nio_fs_TrufflePath = meta.knownKlass(Types.sun_nio_fs_TrufflePath);
         sun_nio_fs_TrufflePath_HIDDEN_TRUFFLE_FILE = sun_nio_fs_TrufflePath.requireHiddenField(Names.HIDDEN_TRUFFLE_FILE);
@@ -1137,17 +1212,9 @@ public final class TruffleIO implements ContextAccess {
         inetAddressResolverLookupPolicySync = new InetAddressResolver_LookupPolicy_Sync(this);
 
         sun_nio_ch_Net = meta.knownKlass(Types.sun_nio_ch_Net);
+        netShutFlagsSync = new Net_ShutFlags_Sync(this);
 
         setEnv(context.getEnv());
-    }
-
-    /**
-     * See {@link Meta#postSystemInit()}.
-     */
-    public void postSystemInit() {
-        this.fileAttributeParserSync = new FileAttributeParser_Sync(this);
-        this.fileChannelImplSync = new FileChannelImpl_Sync(this);
-        netShutFlagsSync = new Net_ShutFlags_Sync(this);
     }
 
     private void setEnv(TruffleLanguage.Env env) {
@@ -1267,6 +1334,106 @@ public final class TruffleIO implements ContextAccess {
             nextFd = currentFd + 1;
         }
         return nextFd;
+    }
+
+    private long sequentialWritev(@JavaType(Object.class) StaticObject self,
+                    FDAccess fdAccess, AddressLengthPair[] addressLengthPairs) {
+        long ret = 0;
+        for (AddressLengthPair addressLengthPair : addressLengthPairs) {
+            long currAddr = addressLengthPair.address();
+            long currLength = addressLengthPair.length();
+            long currWritten = 0;
+            do {
+                long nextWrite = Math.min(Integer.MAX_VALUE, currLength - currWritten);
+                // unchecked cast is safe since nextWrite <= Integer.MAX_VALUE
+                int written = writeAddress(self, fdAccess, currAddr + currWritten, (int) nextWrite);
+                if (written <= 0 && currLength > currWritten) {
+                    /*
+                     * The writev() function shall always write a complete area before proceeding to
+                     * the next.
+                     */
+                    return ret + currWritten;
+                }
+                currWritten += written;
+            } while (currWritten < currLength);
+            ret += currWritten;
+        }
+        return ret;
+    }
+
+    private long sequentialReadv(@JavaType(Object.class) StaticObject self,
+                    FDAccess fdAccess, AddressLengthPair[] addressLengthPairs) {
+        long ret = 0;
+        for (AddressLengthPair addressLengthPair : addressLengthPairs) {
+            long currAddr = addressLengthPair.address();
+            long currLength = addressLengthPair.length();
+            long currRead = 0;
+            do {
+                long nextRead = Math.min(Integer.MAX_VALUE, currLength - currRead);
+                // unchecked cast is safe since nextRead <= Integer.MAX_VALUE
+                int read = readAddress(self, fdAccess, currAddr + currRead, (int) nextRead);
+                if (read <= 0 && currRead < currLength) {
+                    /*
+                     * readv() completely fills iov[0] before proceeding to iov[1], and so on.
+                     */
+                    return ret + currRead;
+                }
+                currRead += read;
+            } while (currRead < currLength);
+            ret += currRead;
+        }
+        return ret;
+    }
+
+    @TruffleBoundary
+    private ByteBuffer[] asByteBuffer(AddressLengthPair[] addressLengthPairs, NativeMemory nativeMemory) {
+        List<ByteBuffer> buffs = new ArrayList<>(addressLengthPairs.length);
+        for (int i = 0; i < addressLengthPairs.length; i++) {
+            long bytesToWrap = addressLengthPairs[i].length;
+            long currAddr = addressLengthPairs[i].address();
+            long wrappedBytes = 0;
+            do {
+                long nextWrap = Math.min(Integer.MAX_VALUE, bytesToWrap - wrappedBytes);
+                // unchecked cast is safe as nextWrap <= Integer.MAX_VALUE
+                try {
+                    buffs.add(nativeMemory.wrapNativeMemory(currAddr + wrappedBytes, (int) nextWrap));
+                } catch (IllegalMemoryAccessException e) {
+                    throw Throw.throwIOException("Invalid memory access: Trying to access memory outside the allocated region", getContext());
+                }
+                wrappedBytes += nextWrap;
+            } while (wrappedBytes < bytesToWrap);
+        }
+        return buffs.toArray(new ByteBuffer[0]);
+    }
+
+    private record AddressLengthPair(long address, long length) {
+    }
+
+    private AddressLengthPair[] extractAddressLengthPairs(long address, int len, NativeMemory nativeMemory) {
+        int lenOffset = ADDRESS_SIZE;
+        int sizeOfIOVec = (short) (ADDRESS_SIZE * 2);
+        long curIOVecAddr = address;
+        long nextAddr;
+        long nextLen;
+        long fullLen = 0;
+        AddressLengthPair[] addressLengthPairs = new AddressLengthPair[len];
+        for (int i = 0; i < len; i++) {
+            try {
+                if (ADDRESS_SIZE == 4) {
+                    nextAddr = nativeMemory.getInt(curIOVecAddr, MemoryAccessMode.PLAIN);
+                    nextLen = nativeMemory.getInt(curIOVecAddr + lenOffset, MemoryAccessMode.PLAIN);
+                } else {
+                    nextAddr = nativeMemory.getLong(curIOVecAddr, MemoryAccessMode.PLAIN);
+                    nextLen = nativeMemory.getLong(curIOVecAddr + lenOffset, MemoryAccessMode.PLAIN);
+                }
+            } catch (IllegalMemoryAccessException e) {
+                throw Throw.throwIOException("Invalid memory access: Trying to access memory outside the allocated region", getContext());
+            }
+            fullLen = Math.addExact(fullLen, nextLen);
+            addressLengthPairs[i] = new AddressLengthPair(nextAddr, nextLen);
+            curIOVecAddr += sizeOfIOVec;
+        }
+        return addressLengthPairs;
     }
 
     private ReadableByteChannel getReadableChannel(@JavaType(Object.class) StaticObject self,
@@ -1391,13 +1558,6 @@ public final class TruffleIO implements ContextAccess {
         throw Throw.throwNonSeekable(context);
     }
 
-    private static int lookupSyncedValue(ObjectKlass klass, Symbol<Name> constant) {
-        Field f = klass.lookupDeclaredField(constant, Types._int);
-        EspressoError.guarantee(f != null, "Failed to sync " + klass.getExternalName() + " constants");
-        assert f.isStatic();
-        return f.getInt(klass.tryInitializeAndGetStatics());
-    }
-
     // Checkstyle: stop field name check
     public static final class RAF_Sync {
         public final int O_RDONLY;
@@ -1407,11 +1567,11 @@ public final class TruffleIO implements ContextAccess {
         public final int O_TEMPORARY;
 
         public RAF_Sync(TruffleIO io) {
-            this.O_RDONLY = lookupSyncedValue(io.java_io_RandomAccessFile, Names.O_RDONLY);
-            this.O_RDWR = lookupSyncedValue(io.java_io_RandomAccessFile, Names.O_RDWR);
-            this.O_SYNC = lookupSyncedValue(io.java_io_RandomAccessFile, Names.O_SYNC);
-            this.O_DSYNC = lookupSyncedValue(io.java_io_RandomAccessFile, Names.O_DSYNC);
-            this.O_TEMPORARY = lookupSyncedValue(io.java_io_RandomAccessFile, Names.O_TEMPORARY);
+            this.O_RDONLY = Meta.getIntConstant(io.java_io_RandomAccessFile, Names.O_RDONLY);
+            this.O_RDWR = Meta.getIntConstant(io.java_io_RandomAccessFile, Names.O_RDWR);
+            this.O_SYNC = Meta.getIntConstant(io.java_io_RandomAccessFile, Names.O_SYNC);
+            this.O_DSYNC = Meta.getIntConstant(io.java_io_RandomAccessFile, Names.O_DSYNC);
+            this.O_TEMPORARY = Meta.getIntConstant(io.java_io_RandomAccessFile, Names.O_TEMPORARY);
         }
     }
 
@@ -1426,13 +1586,13 @@ public final class TruffleIO implements ContextAccess {
         public final int ACCESS_EXECUTE;
 
         public FileSystem_Sync(TruffleIO io) {
-            this.BA_EXISTS = lookupSyncedValue(io.java_io_FileSystem, Names.BA_EXISTS);
-            this.BA_REGULAR = lookupSyncedValue(io.java_io_FileSystem, Names.BA_REGULAR);
-            this.BA_DIRECTORY = lookupSyncedValue(io.java_io_FileSystem, Names.BA_DIRECTORY);
-            this.BA_HIDDEN = lookupSyncedValue(io.java_io_FileSystem, Names.BA_HIDDEN);
-            this.ACCESS_READ = lookupSyncedValue(io.java_io_FileSystem, Names.ACCESS_READ);
-            this.ACCESS_WRITE = lookupSyncedValue(io.java_io_FileSystem, Names.ACCESS_WRITE);
-            this.ACCESS_EXECUTE = lookupSyncedValue(io.java_io_FileSystem, Names.ACCESS_EXECUTE);
+            this.BA_EXISTS = Meta.getIntConstant(io.java_io_FileSystem, Names.BA_EXISTS);
+            this.BA_REGULAR = Meta.getIntConstant(io.java_io_FileSystem, Names.BA_REGULAR);
+            this.BA_DIRECTORY = Meta.getIntConstant(io.java_io_FileSystem, Names.BA_DIRECTORY);
+            this.BA_HIDDEN = Meta.getIntConstant(io.java_io_FileSystem, Names.BA_HIDDEN);
+            this.ACCESS_READ = Meta.getIntConstant(io.java_io_FileSystem, Names.ACCESS_READ);
+            this.ACCESS_WRITE = Meta.getIntConstant(io.java_io_FileSystem, Names.ACCESS_WRITE);
+            this.ACCESS_EXECUTE = Meta.getIntConstant(io.java_io_FileSystem, Names.ACCESS_EXECUTE);
         }
     }
 
@@ -1448,15 +1608,16 @@ public final class TruffleIO implements ContextAccess {
         public final int OTHERS_EXECUTE_VALUE;
 
         public FileAttributeParser_Sync(TruffleIO io) {
-            this.OWNER_READ_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OWNER_READ_VALUE);
-            this.OWNER_WRITE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OWNER_WRITE_VALUE);
-            this.OWNER_EXECUTE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OWNER_EXECUTE_VALUE);
-            this.GROUP_READ_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.GROUP_READ_VALUE);
-            this.GROUP_WRITE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.GROUP_WRITE_VALUE);
-            this.GROUP_EXECUTE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.GROUP_EXECUTE_VALUE);
-            this.OTHERS_READ_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_READ_VALUE);
-            this.OTHERS_WRITE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_WRITE_VALUE);
-            this.OTHERS_EXECUTE_VALUE = lookupSyncedValue(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_EXECUTE_VALUE);
+            // if this would fail we would need to load the class at post system init.
+            this.OWNER_READ_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OWNER_READ_VALUE, false);
+            this.OWNER_WRITE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OWNER_WRITE_VALUE, false);
+            this.OWNER_EXECUTE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OWNER_EXECUTE_VALUE, false);
+            this.GROUP_READ_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.GROUP_READ_VALUE, false);
+            this.GROUP_WRITE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.GROUP_WRITE_VALUE, false);
+            this.GROUP_EXECUTE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.GROUP_EXECUTE_VALUE, false);
+            this.OTHERS_READ_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_READ_VALUE, false);
+            this.OTHERS_WRITE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_WRITE_VALUE, false);
+            this.OTHERS_EXECUTE_VALUE = Meta.getIntConstant(io.sun_nio_fs_FileAttributeParser, Names.OTHERS_EXECUTE_VALUE, false);
         }
     }
 
@@ -1464,7 +1625,8 @@ public final class TruffleIO implements ContextAccess {
         public final int MAP_RW;
 
         public FileChannelImpl_Sync(TruffleIO io) {
-            this.MAP_RW = lookupSyncedValue(io.sun_nio_ch_FileChannelImpl, Names.MAP_RW);
+            // if this would fail we would need to load the class at post system init.
+            this.MAP_RW = Meta.getIntConstant(io.sun_nio_ch_FileChannelImpl, Names.MAP_RW, false);
         }
     }
 
@@ -1477,12 +1639,12 @@ public final class TruffleIO implements ContextAccess {
         public final int UNSUPPORTED_CASE;
 
         public IOStatus_Sync(TruffleIO io) {
-            this.EOF = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.EOF);
-            this.UNAVAILABLE = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.UNAVAILABLE);
-            this.INTERRUPTED = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.INTERRUPTED);
-            this.UNSUPPORTED = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.UNSUPPORTED);
-            this.THROWN = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.THROWN);
-            this.UNSUPPORTED_CASE = lookupSyncedValue(io.sun_nio_ch_IOStatus, Names.UNSUPPORTED_CASE);
+            this.EOF = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.EOF);
+            this.UNAVAILABLE = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.UNAVAILABLE);
+            this.INTERRUPTED = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.INTERRUPTED);
+            this.UNSUPPORTED = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.UNSUPPORTED);
+            this.THROWN = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.THROWN);
+            this.UNSUPPORTED_CASE = Meta.getIntConstant(io.sun_nio_ch_IOStatus, Names.UNSUPPORTED_CASE);
         }
     }
 
@@ -1493,10 +1655,10 @@ public final class TruffleIO implements ContextAccess {
         public final int IPV6_FIRST;
 
         public InetAddressResolver_LookupPolicy_Sync(TruffleIO io) {
-            this.IPV4 = lookupSyncedValue(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV4);
-            this.IPV6 = lookupSyncedValue(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV6);
-            this.IPV4_FIRST = lookupSyncedValue(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV4_FIRST);
-            this.IPV6_FIRST = lookupSyncedValue(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV6_FIRST);
+            this.IPV4 = Meta.getIntConstant(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV4);
+            this.IPV6 = Meta.getIntConstant(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV6);
+            this.IPV4_FIRST = Meta.getIntConstant(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV4_FIRST);
+            this.IPV6_FIRST = Meta.getIntConstant(io.java_net_spi_InetAddressResolver$LookupPolicy, Names.IPV6_FIRST);
         }
     }
 
@@ -1506,9 +1668,10 @@ public final class TruffleIO implements ContextAccess {
         public final int SHUT_RDWR;
 
         public Net_ShutFlags_Sync(TruffleIO io) {
-            this.SHUT_RD = lookupSyncedValue(io.sun_nio_ch_Net, Names.SHUT_RD);
-            this.SHUT_WR = lookupSyncedValue(io.sun_nio_ch_Net, Names.SHUT_WR);
-            this.SHUT_RDWR = lookupSyncedValue(io.sun_nio_ch_Net, Names.SHUT_RDWR);
+            // if this would fail we would need to load the class at post system init.
+            this.SHUT_RD = Meta.getIntConstant(io.sun_nio_ch_Net, Names.SHUT_RD, false);
+            this.SHUT_WR = Meta.getIntConstant(io.sun_nio_ch_Net, Names.SHUT_WR, false);
+            this.SHUT_RDWR = Meta.getIntConstant(io.sun_nio_ch_Net, Names.SHUT_RDWR, false);
         }
     }
     // Checkstyle: resume field name check

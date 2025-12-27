@@ -26,7 +26,6 @@ package com.oracle.svm.hosted.code.amd64;
 
 import java.util.function.Consumer;
 
-import com.oracle.svm.util.ClassUtil;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -37,17 +36,20 @@ import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
-import com.oracle.svm.core.layeredimagesingleton.FeatureSingleton;
-import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
+import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.code.HostedImageHeapConstantPatch;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.util.ClassUtil;
 
-import jdk.graal.compiler.asm.Assembler;
+import jdk.graal.compiler.asm.Assembler.CodeAnnotation;
 import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler.AddressDisplacementAnnotation;
 import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler.OperandDataAnnotation;
 import jdk.graal.compiler.code.CompilationResult;
@@ -59,26 +61,30 @@ import jdk.vm.ci.meta.VMConstant;
 
 @AutomaticallyRegisteredFeature
 @Platforms({Platform.AMD64.class})
-class AMD64HostedPatcherFeature implements InternalFeature, FeatureSingleton, UnsavedSingleton {
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class)
+class AMD64HostedPatcherFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(PatchConsumerFactory.HostedPatchConsumerFactory.class, new PatchConsumerFactory.HostedPatchConsumerFactory() {
-            @Override
-            public Consumer<Assembler.CodeAnnotation> newConsumer(CompilationResult compilationResult) {
-                return new Consumer<>() {
-                    @Override
-                    public void accept(Assembler.CodeAnnotation annotation) {
-                        if (annotation instanceof OperandDataAnnotation) {
-                            compilationResult.addAnnotation(new AMD64HostedPatcher((OperandDataAnnotation) annotation));
+        ImageSingletons.add(PatchConsumerFactory.HostedPatchConsumerFactory.class, new AMD64HostedPatchConsumerFactory());
+    }
 
-                        } else if (annotation instanceof AddressDisplacementAnnotation) {
-                            AddressDisplacementAnnotation dispAnnotation = (AddressDisplacementAnnotation) annotation;
-                            compilationResult.addAnnotation(new HostedImageHeapConstantPatch(dispAnnotation.operandPosition, (JavaConstant) dispAnnotation.annotation));
-                        }
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class)
+    private static final class AMD64HostedPatchConsumerFactory extends PatchConsumerFactory.HostedPatchConsumerFactory {
+        @Override
+        public Consumer<CodeAnnotation> newConsumer(CompilationResult compilationResult) {
+            return new Consumer<>() {
+                @Override
+                public void accept(CodeAnnotation annotation) {
+                    if (annotation instanceof OperandDataAnnotation) {
+                        compilationResult.addAnnotation(new AMD64HostedPatcher((OperandDataAnnotation) annotation));
+
+                    } else if (annotation instanceof AddressDisplacementAnnotation) {
+                        AddressDisplacementAnnotation dispAnnotation = (AddressDisplacementAnnotation) annotation;
+                        compilationResult.addAnnotation(new HostedImageHeapConstantPatch(dispAnnotation.operandPosition, (JavaConstant) dispAnnotation.annotation));
                     }
-                };
-            }
-        });
+                }
+            };
+        }
     }
 }
 

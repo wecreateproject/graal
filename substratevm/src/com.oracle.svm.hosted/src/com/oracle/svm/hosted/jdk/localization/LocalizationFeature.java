@@ -37,9 +37,6 @@ import java.text.spi.DecimalFormatSymbolsProvider;
 import java.text.spi.NumberFormatProvider;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,15 +55,16 @@ import java.util.spi.LocaleNameProvider;
 import java.util.spi.LocaleServiceProvider;
 import java.util.spi.ResourceBundleControlProvider;
 import java.util.spi.TimeZoneNameProvider;
-import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
-import com.oracle.graal.pointsto.ObjectScanner;
+import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
+import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.svm.core.ClassLoaderSupport;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
@@ -81,6 +79,7 @@ import com.oracle.svm.core.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.AfterRegistrationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
@@ -155,7 +154,7 @@ public class LocalizationFeature implements InternalFeature {
 
     private Charset defaultCharset;
 
-    protected Set<Locale> allLocales;
+    protected EconomicSet<Locale> allLocales;
 
     protected LocalizationSupport support;
 
@@ -302,7 +301,6 @@ public class LocalizationFeature implements InternalFeature {
         String reason = "All ResourceBundleControlProvider that are registered as services end up as objects in the image heap, and are therefore registered to be initialized at image build time";
         ServiceLoader.load(ResourceBundleControlProvider.class).stream()
                         .forEach(provider -> ImageSingletons.lookup(RuntimeClassInitializationSupport.class).initializeAtBuildTime(provider.type(), reason));
-
     }
 
     /**
@@ -314,7 +312,7 @@ public class LocalizationFeature implements InternalFeature {
      * {@link ResourceBundle} object in the heap, and we eagerly initialize it.
      */
     @SuppressWarnings("unused")
-    private void eagerlyInitializeBundles(DuringAnalysisAccess access, ResourceBundle bundle, ObjectScanner.ScanReason reason) {
+    private void eagerlyInitializeBundles(DuringAnalysisAccess access, ResourceBundle bundle, ScanReason reason) {
         assert optimizedMode : "Should only be triggered in the optimized mode.";
         try {
             /*
@@ -341,22 +339,30 @@ public class LocalizationFeature implements InternalFeature {
     }
 
     @Override
-    public void beforeAnalysis(BeforeAnalysisAccess access) {
+    public void beforeAnalysis(BeforeAnalysisAccess a) {
         addResourceBundles();
+        var access = (FeatureImpl.BeforeAnalysisAccessImpl) a;
+        /*
+         * Static @Stable fields initialized in static initializers of build-time initialized
+         * classes.
+         */
+        access.allowStableFieldFoldingBeforeAnalysis(access.findField("sun.util.locale.BaseLocale", "constantBaseLocales"));
+        access.allowStableFieldFoldingBeforeAnalysis(access.findField("java.lang.CharacterDataLatin1", "sharpsMap"));
     }
 
     @Override
     public void duringAnalysis(DuringAnalysisAccess a) {
         DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
-        scanLocaleCache(access, baseLocaleCacheField);
-        scanLocaleCache(access, localeCacheField);
-        scanLocaleCache(access, candidatesCacheField);
-        access.rescanRoot(langAliasesCacheField);
-        access.rescanRoot(parentLocalesMapField);
+        ScanReason reason = new OtherReason("Manual rescan triggered during analysis from " + LocalizationFeature.class);
+        scanLocaleCache(access, baseLocaleCacheField, reason);
+        scanLocaleCache(access, localeCacheField, reason);
+        scanLocaleCache(access, candidatesCacheField, reason);
+        access.rescanRoot(langAliasesCacheField, reason);
+        access.rescanRoot(parentLocalesMapField, reason);
     }
 
-    private void scanLocaleCache(DuringAnalysisAccessImpl access, Field cacheFieldField) {
-        access.rescanRoot(cacheFieldField);
+    private void scanLocaleCache(DuringAnalysisAccessImpl access, Field cacheFieldField, ScanReason reason) {
+        access.rescanRoot(cacheFieldField, reason);
 
         Object localeCache;
         try {
@@ -365,18 +371,18 @@ public class LocalizationFeature implements InternalFeature {
             throw VMError.shouldNotReachHere(ex);
         }
         if (localeCache != null && localeObjectCacheMapField != null) {
-            access.rescanField(localeCache, localeObjectCacheMapField);
+            access.rescanField(localeCache, localeObjectCacheMapField, reason);
         }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private static Set<Locale> processLocalesOption() {
-        Set<Locale> locales = new HashSet<>();
+    private static EconomicSet<Locale> processLocalesOption() {
+        EconomicSet<Locale> locales = EconomicSet.create();
         if (Options.IncludeAllLocales.getValue()) {
-            Collections.addAll(locales, Locale.getAvailableLocales());
+            locales.addAll(Arrays.asList(Locale.getAvailableLocales()));
             /* Fallthrough to also allow adding custom locales */
         } else {
-            Collections.addAll(locales, MINIMAL_LOCALES);
+            locales.addAll(Arrays.asList(MINIMAL_LOCALES));
         }
         List<String> invalid = new ArrayList<>();
         for (String tag : Options.IncludeLocales.getValue().values()) {
@@ -548,7 +554,9 @@ public class LocalizationFeature implements InternalFeature {
             if (locale != null) {
                 /* Get rid of locale specific suffix. */
                 String baseName = input.substring(0, splitIndex);
-                prepareBundle(AccessCondition.unconditional(), baseName, Collections.singletonList(locale));
+                EconomicSet<Locale> set = EconomicSet.create();
+                set.add(locale);
+                prepareBundle(AccessCondition.unconditional(), baseName, set);
                 return;
             } else {
                 trace("Cannot parse wanted locale " + input.substring(splitIndex + 1) + ", default will be used instead.");
@@ -583,7 +591,7 @@ public class LocalizationFeature implements InternalFeature {
     };
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void prepareBundle(AccessCondition condition, String baseName, Collection<Locale> wantedLocales) {
+    public void prepareBundle(AccessCondition condition, String baseName, Iterable<Locale> wantedLocales) {
         prepareBundleInternal(condition, baseName, wantedLocales);
 
         String alternativeBundleName = null;
@@ -598,7 +606,7 @@ public class LocalizationFeature implements InternalFeature {
         }
     }
 
-    private void prepareBundleInternal(AccessCondition condition, String baseName, Collection<Locale> wantedLocales) {
+    private void prepareBundleInternal(AccessCondition condition, String baseName, Iterable<Locale> wantedLocales) {
         boolean somethingFound = false;
         for (Locale locale : wantedLocales) {
             support.registerBundleLookup(condition, baseName);
@@ -643,8 +651,8 @@ public class LocalizationFeature implements InternalFeature {
                             "verify the bundle path is accessible in the classpath.";
             trace(errorMessage);
             prepareNegativeBundle(condition, baseName, Locale.ROOT, false);
-            for (String language : wantedLocales.stream().map(Locale::getLanguage).collect(Collectors.toSet())) {
-                prepareNegativeBundle(condition, baseName, Locale.of(language), false);
+            for (Locale locale : wantedLocales) {
+                prepareNegativeBundle(condition, baseName, Locale.of(locale.getLanguage()), false);
             }
             for (Locale locale : wantedLocales) {
                 if (!locale.getCountry().isEmpty()) {

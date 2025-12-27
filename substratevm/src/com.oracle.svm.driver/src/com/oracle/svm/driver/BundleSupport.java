@@ -39,14 +39,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
@@ -71,6 +69,7 @@ import com.oracle.svm.util.StringUtil;
 
 import jdk.graal.compiler.util.json.JsonPrinter;
 import jdk.graal.compiler.util.json.JsonWriter;
+import org.graalvm.collections.EconomicSet;
 
 final class BundleSupport {
 
@@ -89,7 +88,6 @@ final class BundleSupport {
     Map<Path, Path> pathCanonicalizations = new HashMap<>();
     Map<Path, Path> pathSubstitutions = new HashMap<>();
 
-    private final boolean forceBuilderOnClasspath;
     private final List<String> nativeImageArgs;
     private List<String> updatedNativeImageArgs;
     final ArrayList<String> bundleLauncherArgs = new ArrayList<>();
@@ -313,7 +311,6 @@ final class BundleSupport {
         } catch (IOException e) {
             throw NativeImage.showError("Unable to create bundle directory layout", e);
         }
-        forceBuilderOnClasspath = !nativeImage.config.modulePathBuild;
         nativeImageArgs = nativeImage.getNativeImageArgs();
     }
 
@@ -342,8 +339,10 @@ final class BundleSupport {
         }
 
         bundleProperties.loadAndVerify();
-        forceBuilderOnClasspath = bundleProperties.forceBuilderOnClasspath();
-        nativeImage.config.modulePathBuild = !forceBuilderOnClasspath;
+        if (bundleProperties.forceBuilderOnClasspath()) {
+            throw NativeImage.showError("The given bundle file " + bundleFilePath + " uses the BuilderOnClasspath property which is not supported anymore. " +
+                            "To build this bundle use the latest bugfix release of the GraalVM version that was used to build the bundle.");
+        }
 
         try {
             inputDir = rootDir.resolve("input");
@@ -502,7 +501,7 @@ final class BundleSupport {
             Path tmpPath = ClassUtil.CLASS_MODULE_PATH_EXCLUDE_DIRECTORIES_ROOT.resolve("tmp");
             boolean subdirInTmp = origPath.startsWith(tmpPath) && !origPath.equals(tmpPath);
             if (!subdirInTmp) {
-                Set<Path> forbiddenPaths = new HashSet<>(ClassUtil.CLASS_MODULE_PATH_EXCLUDE_DIRECTORIES);
+                EconomicSet<Path> forbiddenPaths = EconomicSet.create(ClassUtil.CLASS_MODULE_PATH_EXCLUDE_DIRECTORIES);
                 forbiddenPaths.add(rootDir);
                 for (Path path : forbiddenPaths) {
                     if (origPath.startsWith(path)) {
@@ -983,7 +982,6 @@ final class BundleSupport {
             properties.put(PROPERTY_KEY_BUNDLE_FILE_VERSION_MAJOR, String.valueOf(BUNDLE_FILE_FORMAT_VERSION_MAJOR));
             properties.put(PROPERTY_KEY_BUNDLE_FILE_VERSION_MINOR, String.valueOf(BUNDLE_FILE_FORMAT_VERSION_MINOR));
             properties.put(PROPERTY_KEY_BUNDLE_FILE_CREATION_TIMESTAMP, ArchiveSupport.currentTime());
-            properties.put(PROPERTY_KEY_BUILDER_ON_CLASSPATH, String.valueOf(forceBuilderOnClasspath));
             boolean imageBuilt = !nativeImage.isDryRun();
             properties.put(PROPERTY_KEY_IMAGE_BUILT, String.valueOf(imageBuilt));
             if (imageBuilt) {

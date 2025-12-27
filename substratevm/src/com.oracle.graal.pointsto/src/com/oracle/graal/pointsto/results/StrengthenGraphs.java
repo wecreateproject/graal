@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -181,8 +182,8 @@ public abstract class StrengthenGraphs {
             }
         }
         ImageBuildStatistics imageBuildStats = ImageBuildStatistics.counters();
-        imageBuildStats.insert("instancefield_neverNull").addAndGet(neverNull);
-        imageBuildStats.insert("instancefield_canBeNull").addAndGet(canBeNull);
+        imageBuildStats.createCounter("instancefield_neverNull").addAndGet(neverNull);
+        imageBuildStats.createCounter("instancefield_canBeNull").addAndGet(canBeNull);
     }
 
     @SuppressWarnings("try")
@@ -276,7 +277,7 @@ public abstract class StrengthenGraphs {
 
     protected abstract String getTypeName(AnalysisType type);
 
-    protected abstract boolean simplifyDelegate(Node n, SimplifierTool tool);
+    protected abstract boolean simplifyDelegate(Node n, SimplifierTool tool, Predicate<Node> isUnreachable);
 
     /* Wrapper to clearly identify phase in IGV graph dumps. */
     public class AnalysisStrengthenGraphsPhase extends BasePhase<CoreProviders> {
@@ -313,7 +314,7 @@ public abstract class StrengthenGraphs {
         // placeholder
     }
 
-    static String getQualifiedName(StructuredGraph graph) {
+    protected static String getQualifiedName(StructuredGraph graph) {
         return ((AnalysisMethod) graph.method()).getQualifiedName();
     }
 
@@ -392,7 +393,7 @@ final class StrengthenGraphsCounters {
 
         ImageBuildStatistics imageBuildStats = ImageBuildStatistics.counters();
         for (Counter counter : Counter.values()) {
-            values[counter.ordinal()] = imageBuildStats.insert(location + "_" + counter.name());
+            values[counter.ordinal()] = imageBuildStats.createCounter(counter.name(), location);
         }
     }
 

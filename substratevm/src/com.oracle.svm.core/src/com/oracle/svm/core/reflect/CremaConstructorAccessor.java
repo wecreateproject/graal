@@ -40,16 +40,17 @@ public final class CremaConstructorAccessor extends AbstractCremaAccessor implem
     }
 
     @Override
-    public Object newInstance(Object[] args) throws InvocationTargetException {
+    public Object newInstance(Object[] initialArguments) throws InvocationTargetException {
+        Object[] args = initialArguments == null ? NO_ARGS : initialArguments;
         verifyArguments(args);
         ensureDeclaringClassInitialized();
 
-        Object newReference = CremaSupport.singleton().rawNewInstance(targetMethod.getDeclaringClass());
+        Object newReference = CremaSupport.singleton().allocateInstance(targetMethod.getDeclaringClass());
         Object[] finalArgs = new Object[args.length + 1];
         finalArgs[0] = newReference;
         System.arraycopy(args, 0, finalArgs, 1, args.length);
         try {
-            CremaSupport.singleton().execute(targetMethod, finalArgs);
+            CremaSupport.singleton().execute(targetMethod, finalArgs, false);
         } catch (Throwable t) {
             throw new InvocationTargetException(t);
         }

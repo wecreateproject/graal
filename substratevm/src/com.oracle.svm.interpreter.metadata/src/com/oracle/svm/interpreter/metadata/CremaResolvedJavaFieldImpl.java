@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.interpreter.metadata;
 
+import org.graalvm.nativeimage.impl.ClassLoading;
+
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaField;
 import com.oracle.svm.core.hub.crema.CremaSupport;
@@ -61,15 +63,14 @@ public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField imp
          * eagerly create a ResolvedJavaType for it, we would force it back in.
          */
         if (resolvedType == null) {
-            UnresolvedJavaType unresolvedJavaType = UnresolvedJavaType.create(getSymbolicType().toString());
             /*
              * This should not trigger actual class loading. Instead, we query the loader registry
              * for an already loaded class.
              */
-            Class<?> cls = CremaSupport.singleton().findLoadedClass(unresolvedJavaType, getDeclaringClass());
+            Class<?> cls = CremaSupport.singleton().findLoadedClass(getSymbolicType(), getDeclaringClass());
             if (cls == null) {
                 // Not loaded: return the unresolved type
-                return unresolvedJavaType;
+                return UnresolvedJavaType.create(getSymbolicType().toString());
             }
             resolvedType = (InterpreterResolvedJavaType) DynamicHub.fromClass(cls).getInterpreterType();
         }
@@ -79,8 +80,10 @@ public class CremaResolvedJavaFieldImpl extends InterpreterResolvedJavaField imp
     @Override
     public InterpreterResolvedJavaType getResolvedType() {
         if (resolvedType == null) {
-            Class<?> cls = CremaSupport.singleton().resolveOrThrow(UnresolvedJavaType.create(getSymbolicType().toString()), getDeclaringClass());
-            resolvedType = (InterpreterResolvedJavaType) DynamicHub.fromClass(cls).getInterpreterType();
+            try (var _ = ClassLoading.allowArbitraryClassLoading()) {
+                Class<?> cls = CremaSupport.singleton().resolveOrThrow(getSymbolicType(), getDeclaringClass());
+                resolvedType = (InterpreterResolvedJavaType) DynamicHub.fromClass(cls).getInterpreterType();
+            }
         }
         return resolvedType;
     }

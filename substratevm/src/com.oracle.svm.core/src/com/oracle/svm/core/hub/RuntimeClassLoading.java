@@ -125,22 +125,6 @@ public class RuntimeClassLoading {
         return Options.RuntimeClassLoading.getValue();
     }
 
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public static final class NoRuntimeClassLoading implements BooleanSupplier {
-        @Override
-        public boolean getAsBoolean() {
-            return !isSupported();
-        }
-    }
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public static final class WithRuntimeClassLoading implements BooleanSupplier {
-        @Override
-        public boolean getAsBoolean() {
-            return isSupported();
-        }
-    }
-
     public static Class<?> defineClass(ClassLoader loader, String expectedName, byte[] b, int off, int len, ClassDefinitionInfo info) {
         if (PredefinedClassesSupport.hasBytecodeClasses()) {
             Class<?> knownClass = PredefinedClassesSupport.knownClass(b, off, len);
@@ -183,15 +167,6 @@ public class RuntimeClassLoading {
         throw VMError.unsupportedFeature(
                         "Classes cannot be defined at runtime by default when using ahead-of-time Native Image compilation. Tried to define class '" + className + "'" + System.lineSeparator() +
                                         DEFINITION_NOT_SUPPORTED_MESSAGE);
-    }
-
-    public static DynamicHub getOrCreateArrayHub(DynamicHub hub) {
-        if (hub.getArrayHub() == null) {
-            VMError.guarantee(RuntimeClassLoading.isSupported());
-            // GR-63452
-            throw VMError.unimplemented("array hub creation");
-        }
-        return hub.getArrayHub();
     }
 
     public static final class ClassDefinitionInfo {
@@ -286,5 +261,21 @@ public class RuntimeClassLoading {
             return;
         }
         // GR-59739 runtime linking
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static final class NoRuntimeClassLoading implements BooleanSupplier {
+        @Override
+        public boolean getAsBoolean() {
+            return !isSupported();
+        }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static final class WithRuntimeClassLoading implements BooleanSupplier {
+        @Override
+        public boolean getAsBoolean() {
+            return isSupported();
+        }
     }
 }

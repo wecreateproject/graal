@@ -24,22 +24,30 @@
  */
 package com.oracle.svm.hosted;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
+import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.ClassValueSupport;
+import com.oracle.svm.core.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.core.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.core.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.core.traits.SingletonLayeredInstallationKind.Independent;
+import com.oracle.svm.core.traits.SingletonTraits;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
+import org.graalvm.collections.EconomicSet;
 
 /**
  * This feature reads ClassValues created by the hosted environment and stores them into the image.
+ * See {@link ClassValueSupport}.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Independent.class, other = PartiallyLayerAware.class)
 @AutomaticallyRegisteredFeature
 public final class ClassValueFeature implements InternalFeature {
 
@@ -67,7 +75,7 @@ public final class ClassValueFeature implements InternalFeature {
         FeatureImpl.DuringAnalysisAccessImpl impl = (FeatureImpl.DuringAnalysisAccessImpl) access;
         List<AnalysisType> types = impl.getUniverse().getTypes();
 
-        Set<Object> mapsToRescan = new HashSet<>();
+        EconomicSet<Object> mapsToRescan = EconomicSet.create();
         try {
             for (AnalysisType t : types) {
                 if (!t.isReachable()) {
@@ -114,7 +122,8 @@ public final class ClassValueFeature implements InternalFeature {
         }
 
         int numTypes = impl.getUniverse().getTypes().size();
-        mapsToRescan.forEach(impl::rescanObject);
+        ScanReason reason = new OtherReason("Manual rescan triggered from " + ClassValueFeature.class);
+        mapsToRescan.forEach(obj -> impl.rescanObject(obj, reason));
         if (numTypes != impl.getUniverse().getTypes().size()) {
             access.requireAnalysisIteration();
         }

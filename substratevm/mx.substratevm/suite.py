@@ -1,6 +1,6 @@
 # pylint: disable=line-too-long
 suite = {
-    "mxversion": "7.58.6",
+    "mxversion": "7.68.4",
     "name": "substratevm",
     "version" : "25.1.0",
     "release" : False,
@@ -226,9 +226,43 @@ suite = {
                 "sdk:NATIVEIMAGE",
                 "sdk:NATIVEIMAGE_LIBGRAAL",
                 "compiler:GRAAL",
+                "compiler:VMACCESS",
             ],
             "requiresConcealed" : {
-                "java.base" : ["jdk.internal.module"],
+                "java.base" : [
+                    "jdk.internal.loader",
+                    "jdk.internal.module",
+                    "sun.reflect.annotation"
+                ],
+                "jdk.internal.vm.ci": [
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.runtime"
+                ]
+            },
+            "javaCompliance" : "21+",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+            ],
+            "checkstyle": "com.oracle.svm.core",
+            "workingSets": "SVM",
+            "jacoco" : "include",
+        },
+
+        "com.oracle.svm.sdk": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "sdk:NATIVEIMAGE",
+                "sdk:NATIVEIMAGE_LIBGRAAL",
+                "compiler:GRAAL",
+                "compiler:VMACCESS",
+            ],
+            "requiresConcealed" : {
+                "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.meta",
+                ]
             },
             "javaCompliance" : "21+",
             "annotationProcessors": [
@@ -248,6 +282,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ]
             },
             "javaCompliance" : "21+",
@@ -264,7 +299,6 @@ suite = {
             "subDir" : "src",
             "sourceDirs" : ["src"],
             "javaCompliance" : "17+",
-            "spotbugsIgnoresGenerated" : True,
             "shadedDependencies" : [
                 "CAPNPROTO_RUNTIME",
             ],
@@ -370,9 +404,12 @@ suite = {
                     "jdk.jfr.internal",
                     "jdk.jfr.internal.event",
                     "jdk.jfr.internal.jfc",
+                    "jdk.jfr.internal.settings",
+                    "jdk.jfr.internal.tracing",
                 ],
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.aarch64",
                     "jdk.vm.ci.amd64",
@@ -385,7 +422,6 @@ suite = {
                 ],
             },
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "checkstyleVersion" : "10.21.0",
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
@@ -416,12 +452,12 @@ suite = {
                 ],
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.code",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -441,12 +477,12 @@ suite = {
                     "jdk.vm.ci.code.site",
                     "jdk.vm.ci.amd64",
                     "jdk.vm.ci.code",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -465,12 +501,12 @@ suite = {
                     "jdk.vm.ci.code.site",
                     "jdk.vm.ci.aarch64",
                     "jdk.vm.ci.code",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -489,12 +525,12 @@ suite = {
                     "jdk.vm.ci.code.site",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.riscv64"
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -516,13 +552,13 @@ suite = {
                 ],
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.code.site",
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -546,6 +582,7 @@ suite = {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.aarch64",
                     "jdk.vm.ci.amd64",
                     "jdk.vm.ci.riscv64"
@@ -558,7 +595,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "workingSets": "SVM",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -572,6 +608,7 @@ suite = {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.amd64"
                 ],
             },
@@ -582,7 +619,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "workingSets": "SVM",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -591,6 +627,7 @@ suite = {
             "sourceDirs": ["src"],
             "dependencies": [
                 "com.oracle.svm.common",
+                "com.oracle.svm.sdk",
             ],
             "requires" : [
                 "jdk.internal.vm.ci"
@@ -601,6 +638,7 @@ suite = {
                 ],
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.common",
                     "jdk.vm.ci.runtime"
@@ -629,7 +667,8 @@ suite = {
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.amd64",
                     "jdk.vm.ci.hotspot",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation"
                 ]
             },
             "checkstyle": "com.oracle.svm.core",
@@ -656,6 +695,7 @@ suite = {
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ]
             },
             "checkstyle": "com.oracle.svm.test",
@@ -664,7 +704,6 @@ suite = {
                 "compiler:GRAAL_PROCESSOR",
             ],
             "javaCompliance" : "21+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -677,6 +716,7 @@ suite = {
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                 ]
             },
@@ -755,7 +795,6 @@ suite = {
                 ],
             },
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "checkstyleVersion": "10.21.0",
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
@@ -788,6 +827,7 @@ suite = {
                     "jdk.internal.foreign.abi.aarch64",
                     "jdk.internal.foreign.abi.aarch64.macos",
                     "jdk.internal.foreign.abi.aarch64.linux",
+                    "jdk.internal.foreign.layout",
                     "jdk.internal.loader",
                     "jdk.internal.reflect",
                 ],
@@ -808,8 +848,6 @@ suite = {
             "workingSets": "SVM",
             # disable coverage as long it cannot run on JDK latest [GR-59586]
             "jacoco" : "exclude",
-            # disable SpotBugs as long JDK 22 is unsupported [GR-49566]
-            "spotbugs" : "false",
         },
 
         "com.oracle.svm.hosted.foreign": {
@@ -853,8 +891,6 @@ suite = {
             "workingSets": "SVM",
             # disable coverage as long it cannot run on JDK latest [GR-59586]
             "jacoco" : "exclude",
-            # disable SpotBugs as long JDK 22 is unsupported [GR-49566]
-            "spotbugs" : "false",
         },
 
         # Native libraries below explicitly set _FORTIFY_SOURCE to 0. This constant controls how glibc handles some
@@ -1049,7 +1085,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1066,7 +1101,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "21+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1087,7 +1121,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1121,7 +1154,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "22+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1136,6 +1168,7 @@ suite = {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.test",
@@ -1145,7 +1178,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance": "21+",
-            "spotbugs": "false",
             "jacoco": "exclude",
             "testProject": True,
         },
@@ -1162,7 +1194,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance": "21+",
-            "spotbugs": "false",
             "jacoco": "exclude",
             "testProject": True,
         },
@@ -1181,7 +1212,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "21+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1195,8 +1225,9 @@ suite = {
             ],
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
-                    "jdk.vm.ci.meta"
-                ],
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+],
             },
             "checkstyle": "com.oracle.svm.test",
             "workingSets": "SVM",
@@ -1205,7 +1236,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "21+",
-            "spotbugs": "false",
             "testProject": True,
             "jacoco" : "exclude",
         },
@@ -1217,7 +1247,6 @@ suite = {
             "checkstyle" : "com.oracle.svm.hosted",
             "javaCompliance" : "21+",
             "workingSets" : "SVM",
-            "spotbugs" : "false",
             "jacoco" : "exclude",
         },
 
@@ -1238,7 +1267,8 @@ suite = {
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.aarch64",
                     "jdk.vm.ci.amd64",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle" : "com.oracle.svm.hosted",
@@ -1248,7 +1278,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "workingSets" : "SVM",
-            "spotbugs" : "false",
             "jacoco" : "exclude",
         },
 
@@ -1270,12 +1299,12 @@ suite = {
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.code.stack",
                     "jdk.vm.ci.hotspot",
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation"
                 ],
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1298,6 +1327,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.test",
@@ -1307,8 +1337,23 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "testProject": True,
+            "jacoco" : "exclude",
+        },
+
+        "com.oracle.svm.features": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "sdk:NATIVEIMAGE",
+            ],
+            "checkstyle": "com.oracle.svm.core",
+            "javaCompliance" : "21+",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "workingSets": "SVM",
             "jacoco" : "exclude",
         },
 
@@ -1359,13 +1404,13 @@ suite = {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.aarch64",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.code.stack"
                 ]
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1390,7 +1435,6 @@ suite = {
             ],
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1409,7 +1453,6 @@ suite = {
             ],
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1428,7 +1471,6 @@ suite = {
             ],
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1444,6 +1486,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "generatedDependencies": [
@@ -1456,7 +1499,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "workingSets": "SVM",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1475,6 +1517,7 @@ suite = {
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ]
             },
             "checkstyle": "com.oracle.svm.hosted",
@@ -1482,7 +1525,6 @@ suite = {
             "annotationProcessors": [
             ],
             "javaCompliance" : "21+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1501,7 +1543,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1519,6 +1560,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ]
             },
             "checkstyle": "com.oracle.svm.hosted",
@@ -1528,7 +1570,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1553,7 +1594,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",
             "jacoco" : "exclude",
         },
 
@@ -1569,6 +1609,7 @@ suite = {
             "requiresConcealed": {
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                     "jdk.vm.ci.common",
                 ]
@@ -1580,7 +1621,6 @@ suite = {
                 "SVM_PROCESSOR",
             ],
             "javaCompliance" : "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "jacoco" : "exclude",
             "graalCompilerSourceEdition": "ignore",
         },
@@ -1593,13 +1633,21 @@ suite = {
                 "com.oracle.graal.pointsto",
             ],
             "requiresConcealed" : {
+                "java.base" : [
+                    "jdk.internal.misc", # Unsafe
+                ],
                 "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.code",
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance": "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "substratevm:SVM_PROCESSOR",
+            ],
             "workingSets": "SVM",
             "jacoco": "exclude",
         },
@@ -1618,6 +1666,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                 ],
                 "java.base" : [
@@ -1626,7 +1675,6 @@ suite = {
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance": "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "substratevm:SVM_PROCESSOR",
@@ -1645,11 +1693,11 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance": "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "substratevm:SVM_PROCESSOR",
@@ -1669,6 +1717,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                 ],
                 "java.base" : [
                     "jdk.internal.misc", # Signal
@@ -1676,7 +1725,6 @@ suite = {
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance": "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "substratevm:SVM_PROCESSOR",
             ],
@@ -1695,6 +1743,7 @@ suite = {
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
                     "jdk.vm.ci.code",
                 ],
                 "java.base" : [
@@ -1703,7 +1752,6 @@ suite = {
             },
             "checkstyle": "com.oracle.svm.hosted",
             "javaCompliance": "24+",
-            "spotbugs": "false",  # SpotBugs does not support Java 24
             "annotationProcessors": [
                 "substratevm:SVM_PROCESSOR",
             ],
@@ -1750,6 +1798,7 @@ suite = {
                 "compiler:GRAAL",
                 "NATIVE_IMAGE_BASE",
                 "SVM_CONFIGURE",
+                "compiler:HOSTVMACCESS",
                 "espresso-shared:ESPRESSO_SVM",
             ],
             "moduleInfo" : {
@@ -1765,6 +1814,7 @@ suite = {
                             org.graalvm.nativeimage.agent.jvmtibase,
                             org.graalvm.nativeimage.agent.tracing,
                             org.graalvm.nativeimage.agent.diagnostics,
+                            org.graalvm.nativeimage.enterprise.testrunner,
                             com.oracle.svm.svm_enterprise,
                             com.oracle.svm.svm_enterprise.llvm,
                             com.oracle.svm_enterprise.ml_dataset,
@@ -1803,6 +1853,7 @@ suite = {
                     "org.graalvm.nativeimage.configure",
                     "org.graalvm.nativeimage.libgraal",
                     "org.graalvm.espresso.shared.svm",
+                    "jdk.graal.compiler.vmaccess",
                 ],
                 "uses" : [
                     "org.graalvm.nativeimage.Platform",
@@ -1816,6 +1867,7 @@ suite = {
                     "jdk.internal.vm.ci": [
                         "jdk.vm.ci.common",
                         "jdk.vm.ci.meta",
+                        "jdk.vm.ci.meta.annotation",
                         "jdk.vm.ci.code",
                         "jdk.vm.ci.services",
                         "jdk.vm.ci.runtime",
@@ -1902,6 +1954,7 @@ suite = {
             "subDir": "src",
             "description" : "SubstrateVM basic library-support components",
             "dependencies": [
+                "com.oracle.svm.features",
                 "com.oracle.svm.polyglot",
                 "com.oracle.svm.thirdparty",
             ],
@@ -1926,7 +1979,7 @@ suite = {
 
         "JUNIT_SUPPORT": {
             "subDir": "src",
-            "description" : "SubstrateVM suppoprt for building JUnit test into image",
+            "description" : "SubstrateVM support for building JUnit test into image",
             "dependencies": [
                 "com.oracle.svm.junit",
             ],
@@ -1945,6 +1998,7 @@ suite = {
                     "static com.oracle.mxtool.junit",
                     "static junit",
                     "static hamcrest",
+                    "org.graalvm.collections",
                 ]
             },
             "noMavenJavadoc": True,
@@ -2047,6 +2101,7 @@ suite = {
                     "jdk.internal.vm.ci": [
                         "jdk.vm.ci.common",
                         "jdk.vm.ci.meta",
+                        "jdk.vm.ci.meta.annotation",
                         "jdk.vm.ci.code",
                         "jdk.vm.ci.services",
                         "jdk.vm.ci.runtime",
@@ -2103,6 +2158,7 @@ suite = {
                             "dependency:com.oracle.svm.native.jvm.posix/*",
                             "dependency:com.oracle.svm.native.libcontainer/*",
                             "file:debug/include",
+                            "file:src/com.oracle.svm.core/src/com/oracle/svm/core/gc/shared/include",
                         ],
                     },
                 },
@@ -2154,6 +2210,7 @@ suite = {
                 "jdk.graal.compiler.options.OptionDescriptors",
               ],
               "requires" : [
+                "org.graalvm.nativeimage.configure",
                 "org.graalvm.nativeimage.builder",
                 "java.management",
                 "jdk.management",
@@ -2188,6 +2245,7 @@ suite = {
                 "requiresConcealed" : {
                     "jdk.internal.vm.ci" : [
                         "jdk.vm.ci.meta",
+                        "jdk.vm.ci.meta.annotation",
                     ],
                 },
                 "requires": [
@@ -2217,6 +2275,7 @@ suite = {
                     "com.oracle.svm.diagnosticsagent",
                 ],
                 "requires": [
+                  "org.graalvm.collections",
                   "org.graalvm.nativeimage.builder",
                 ],
             },
@@ -2258,9 +2317,12 @@ suite = {
             "dependencies": [
                 "com.oracle.svm.common",
                 "com.oracle.svm.util",
+                "com.oracle.svm.sdk",
             ],
             "distDependencies": [
                 "compiler:GRAAL",
+                "compiler:VMACCESS",
+                "compiler:HOSTVMACCESS",
                 "sdk:NATIVEIMAGE",
                 "sdk:NATIVEIMAGE_LIBGRAAL",
             ],
@@ -2275,7 +2337,7 @@ suite = {
                     "org.graalvm.collections",
                 ],
                 "exports" : [
-                    """com.oracle.svm.util to org.graalvm.nativeimage.pointsto,
+                    """com.oracle.svm.util* to org.graalvm.nativeimage.pointsto,
                            org.graalvm.nativeimage.builder,
                            org.graalvm.nativeimage.configure,
                            org.graalvm.nativeimage.librarysupport,
@@ -2306,7 +2368,14 @@ suite = {
                            org.graalvm.nativeimage.foreign,
                            org.graalvm.truffle.runtime.svm,
                            com.oracle.truffle.enterprise.svm""",
+                    """com.oracle.svm.sdk.staging.hosted.layeredimage to org.graalvm.nativeimage.pointsto,
+                           org.graalvm.nativeimage.builder""",
+                    """com.oracle.svm.sdk.staging.layeredimage to org.graalvm.nativeimage.pointsto,
+                           org.graalvm.nativeimage.builder""",
                 ],
+                "uses" : [
+                    "jdk.graal.compiler.vmaccess.VMAccess.Builder"
+                ]
             },
             "noMavenJavadoc": True,
             "maven": {
@@ -2360,6 +2429,7 @@ suite = {
                 ],
                 "jdk.internal.vm.ci" : [
                   "jdk.vm.ci.meta",
+                  "jdk.vm.ci.meta.annotation",
                   "jdk.vm.ci.common",
                   "jdk.vm.ci.code",
                   "jdk.vm.ci.runtime",
@@ -2381,7 +2451,8 @@ suite = {
             "distDependencies": [
                 "compiler:GRAAL",
                 "NATIVE_IMAGE_BASE",
-                "POINTSTO"
+                "POINTSTO",
+                "compiler:HOSTVMACCESS"
             ],
             "exclude": [
             ],
@@ -2389,10 +2460,13 @@ suite = {
                 "name" : "org.graalvm.nativeimage.pointsto.standalone",
                 "exports" : [
                     "com.oracle.graal.pointsto.standalone",
+                    "com.oracle.graal.pointsto.standalone.plugins",
                 ],
                 "requires": [
                     "java.management",
                     "jdk.management",
+                    "org.graalvm.collections",
+                    "jdk.graal.compiler.vmaccess",
                     "org.graalvm.nativeimage",
                 ],
                 "requiresConcealed" : {
@@ -2401,6 +2475,7 @@ suite = {
                     ],
                     "jdk.internal.vm.ci" : [
                         "jdk.vm.ci.meta",
+                        "jdk.vm.ci.meta.annotation",
                         "jdk.vm.ci.common",
                         "jdk.vm.ci.code",
                         "jdk.vm.ci.runtime",
@@ -2475,6 +2550,7 @@ suite = {
                 "clibraries/" : ["extracted-dependency:substratevm:SVM_HOSTED_NATIVE"],
                 "builder/clibraries/" : ["extracted-dependency:substratevm:SVM_HOSTED_NATIVE"],
                 "builder/lib/" : ["dependency:com.oracle.svm.native.reporterchelper"],
+                "schemas/reachability-metadata-schema.json" : ["file:schemas/reachability-metadata-schema-v1.2.0.json"],
                 # Note: `ld64.lld` is a symlink to `lld`, but it is dereferenced here.
                 "bin/" : ["extracted-dependency:LLVM_LLD_STANDALONE/bin/ld64.lld"],
             },
@@ -2569,6 +2645,7 @@ suite = {
                 "requiresConcealed": {
                     "jdk.internal.vm.ci" : [
                         "jdk.vm.ci.meta",
+                        "jdk.vm.ci.meta.annotation",
                         "jdk.vm.ci.code",
                         "jdk.vm.ci.amd64",
                         "jdk.vm.ci.aarch64",
@@ -2615,6 +2692,15 @@ suite = {
             "maven" : False,
         },
 
+        "SVM_LLVM_GRAALVM_SUPPORT": {
+            "native": True,
+            "description": "LLVM backend support distribution for SVM",
+            "layout": {
+                "native-image.properties": "file:mx.substratevm/tool-llvm.properties",
+            },
+            "maven": False,
+        },
+
         "SVM_TRUFFLE_TCK" : {
             "subDir" : "src",
             "description" : "Truffle TCK",
@@ -2636,6 +2722,7 @@ suite = {
                 "com.oracle.svm.jdwp.server",
             ],
             "distDependencies": [
+                "sdk:COLLECTIONS",
                 "substratevm:SVM",
             ],
             "moduleInfo" : {

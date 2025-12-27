@@ -420,10 +420,10 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution, metaclass=ABCMeta):
                 for profile in _image_profiles(GraalVmNativeProperties.canonical_image_name(image_config)):
                     _add(layout, _macro_dir, 'file:{}'.format(abspath(profile)))
 
-        def _add_link(_dest, _target, _component=None, _dest_base_name=None):
+        def _add_link(_dest, _target, _component=None, _suggested_dest_base_name=None):
             assert _dest.endswith('/')
             _linkname = relpath(path_substitutions.substitute(_target), start=path_substitutions.substitute(_dest[:-1]))
-            dest_base_name = _dest_base_name or basename(_target)
+            dest_base_name = _suggested_dest_base_name or basename(_target)
             if _linkname != dest_base_name:
                 if mx.is_windows():
                     if _target.endswith('.exe') or _target.endswith('.cmd'):
@@ -585,10 +585,10 @@ class BaseGraalVmLayoutDistribution(mx.LayoutDistribution, metaclass=ABCMeta):
                     _link_dest = _component_base + _component_link
                     # add links `LauncherConfig.links` -> `LauncherConfig.destination`
                     _link_dest_dir, _link_dest_base_name = os.path.split(_link_dest)
-                    _add_link(_link_dest_dir + '/', _launcher_dest, _component, _dest_base_name=_link_dest_base_name)
+                    _final_link_dest = _add_link(_link_dest_dir + '/', _launcher_dest, _component, _suggested_dest_base_name=_link_dest_base_name)
                     # add links from jre/bin to component link
                     if _launcher_config.default_symlinks:
-                        _link_path = _add_link(_jdk_jre_bin, _link_dest, _component)
+                        _link_path = _add_link(_jdk_jre_bin, _final_link_dest, _component)
                         _jre_bin_names.append(basename(_link_path))
                 if stage1 or _rebuildable_image(_launcher_config):
                     _add_native_image_macro(_launcher_config, _component, stage1)
@@ -906,13 +906,12 @@ def _get_graalvm_configuration(base_name, components=None, stage1=False):
 
         if vm_dist_name is not None:
             # Examples (later we call `.lower().replace('_', '-')`):
-            # GraalVM_community_openjdk_17.0.7+4.1
-            # GraalVM_jdk_17.0.7+4.1
-            # GraalVM_jit_jdk_17.0.7+4.1
-            base_dir = '{base_name}{vm_dist_name}_{jdk_type}_{version}'.format(
+            # GraalVM_community_25.1.0+36.1
+            # GraalVM_25.1.0+36.1
+            # GraalVM_jit_25.1.0+36.1
+            base_dir = '{base_name}{vm_dist_name}_{version}'.format(
                 base_name=base_name,
                 vm_dist_name=('_' + vm_dist_name) if vm_dist_name else '',
-                jdk_type='jdk' if mx_sdk_vm.ee_implementor() else 'openjdk',
                 version=graalvm_version(version_type='base-dir')
             )
             name_prefix = '{base_name}{vm_dist_name}_java{jdk_version}'.format(
@@ -1279,7 +1278,6 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
         if self._contents is None:
             image_config = self.subject.image_config
             build_args = [
-                '--no-fallback',
                 '-march=compatibility',  # Target maximum portability of all GraalVM images.
                 '-Dorg.graalvm.version={}'.format(_suite.release_version()),
             ] + svm_experimental_options([
@@ -1349,7 +1347,7 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
                     launcher_classpath = NativePropertiesBuildTask.get_launcher_classpath(self._graalvm_dist, graalvm_home, image_config, self.subject.component, exclude_implicit=True)
                     build_args += ['-Dorg.graalvm.launcher.classpath=' + os.pathsep.join(launcher_classpath)]
                     if isinstance(image_config, mx_sdk.LauncherConfig):
-                        build_args += svm_experimental_options(['-H:-ParseRuntimeOptions'])
+                        build_args += ['-H:-ParseRuntimeOptions'] + svm_experimental_options(['-H:-InitializeVM'])
 
                 if has_component('svmee', stage1=True):
                     build_args += [
@@ -2985,38 +2983,45 @@ def graalvm_version(version_type):
         raise mx.abort(f'VM info extraction failed. Exit code: {code}\nOutput: {out.data}')
 
     if version_type == 'graalvm':
-        return _suite.release_version()
+        return _suite.release_version(snapshotSuffix='dev')
     else:
+        graalvm_version = _suite.release_version(snapshotSuffix='dev')
         if _base_jdk_version_info is None:
             _base_jdk_version_info = base_jdk_version_info()
 
-        java_vnum, java_pre, java_build, _ = _base_jdk_version_info
+        _, java_pre, java_build, _ = _base_jdk_version_info
         if version_type == 'vendor':
-            graalvm_pre = '' if _suite.is_release() else '-dev'
+            graalvm_suffix = ''
             if java_pre:
-                graalvm_pre += '.' if graalvm_pre else '-'
-                graalvm_pre += java_pre
+                graalvm_suffix += '.' if graalvm_version.endswith('dev') else '-'
+                graalvm_suffix += java_pre
         else:
             assert version_type == 'base-dir', version_type
-            graalvm_pre = ''
+            graalvm_suffix = ''
         # Ignores `java_opt` (`Runtime.version().optional()`)
         #
         # Examples:
         #
+        # GraalVM version: 25.1.0
         # ```
-        # openjdk version "17.0.7" 2023-04-18
-        # OpenJDK Runtime Environment (build 17.0.7+4-jvmci-23.0-b10)
+        # $ java -version
+        # openjdk 25 2025-09-16
+        # OpenJDK Runtime Environment (build 25+36-3489)
+        # OpenJDK 64-Bit Server VM (build 25+36-3489, mixed mode, sharing)
         # ```
-        # -> `17.0.7-dev+4.1`
+        # -> `25.1.0+36.1`
         #
+        # GraalVM version: 25.1.0-dev
         # ```
-        # openjdk version "21-ea" 2023-09-19
-        # OpenJDK Runtime Environment (build 21-ea+16-1326)
+        # $ java -version
+        # openjdk 25 2025-09-16
+        # OpenJDK Runtime Environment (build 25+36-3489)
+        # OpenJDK 64-Bit Server VM (build 25+36-3489, mixed mode, sharing)
         # ```
-        # -> `21-dev.ea+16.1`
-        return '{java_vnum}{graalvm_pre}{java_build}.{release_build}'.format(
-            java_vnum=java_vnum,
-            graalvm_pre=graalvm_pre,
+        # -> `25.1.0-dev+36.1`
+        return '{graalvm_version}{graalvm_suffix}{java_build}.{release_build}'.format(
+            graalvm_version=graalvm_version,
+            graalvm_suffix=graalvm_suffix,
             java_build=java_build,
             release_build=mx_sdk_vm.release_build
         )
