@@ -3,7 +3,7 @@
 GraalVM welcomes contributors to the core platform and projects that extend that
 platform. There have been significant contributions from both industry
 and academia so far and we thank you for considering to contribute your changes!
-
+--------
 ### How to Contribute
 
 - Learn [how to become a GraalVM contributor](https://www.graalvm.org/community/contributors/).
