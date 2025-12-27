@@ -5,7 +5,7 @@ GraalVM. It depends on [Truffle](https://github.com/graalvm/graal/tree/master/tr
 and is language-agnostic. The tools are available to be used with any language
 built with Truffle and passing [TCK](https://github.com/graalvm/graal/blob/master/truffle/docs/TCK.md)
 tests.
-
+--------
 ## Using Tools
 
 Please refer to https://www.graalvm.org/tools/ to learn how to use each tool.
